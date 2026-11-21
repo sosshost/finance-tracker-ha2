@@ -50,12 +50,25 @@ def action(hass,op,data):
             db.execute('INSERT INTO ft3_category_groups VALUES(?,?,?)',(uuid4().hex,kind,name))
         elif op=='rename_group':
             gid=data.get('group_id');name=_name(data.get('name'))
+            kind=data.get('kind')
+            if kind not in KINDS:raise HomeAssistantError('Ungültiger Kategorietyp')
             g=db.execute('SELECT * FROM ft3_category_groups WHERE id=?',(gid,)).fetchone()
             if not g:raise HomeAssistantError('Oberkategorie nicht gefunden')
-            if db.execute('SELECT 1 FROM ft3_category_groups WHERE kind=? AND name=? AND id<>?',(g['kind'],name,gid)).fetchone():raise HomeAssistantError('Oberkategorie existiert bereits')
+            if db.execute('SELECT 1 FROM ft3_category_groups WHERE kind=? AND name=? AND id<>?',(kind,name,gid)).fetchone():raise HomeAssistantError('Oberkategorie existiert bereits')
+            if kind!=g['kind']:
+                children=[r['category_id'] for r in db.execute('SELECT category_id FROM ft3_category_hierarchy WHERE group_id=?',(gid,))]
+                if children:
+                    placeholders=','.join('?' for _ in children)
+                    # Never silently invalidate existing bookings or planning assignments.
+                    for table,column in [('ft_transactions','category_id'),('ft_recurring','category_id'),('ft_budgets','category_id'),('ft3_plan_categories','category_id')]:
+                        exists=db.execute('SELECT 1 FROM sqlite_master WHERE type="table" AND name=?',(table,)).fetchone()
+                        if exists and db.execute(f'SELECT 1 FROM {table} WHERE {column} IN ({placeholders}) LIMIT 1',children).fetchone():
+                            raise HomeAssistantError('Typwechsel nicht möglich: Unterkategorien werden bereits in Buchungen oder Planungen verwendet. Bitte zunächst die Zuordnungen prüfen.')
+                    for cid in children:
+                        db.execute('UPDATE ft_categories SET kind=? WHERE id=?',(kind,cid))
             for c in db.execute('SELECT category_id,sub_name FROM ft3_category_hierarchy WHERE group_id=?',(gid,)).fetchall():
                 db.execute('UPDATE ft_categories SET name=? WHERE id=?',(name+' · '+c['sub_name'],c['category_id']))
-            db.execute('UPDATE ft3_category_groups SET name=? WHERE id=?',(name,gid))
+            db.execute('UPDATE ft3_category_groups SET name=?,kind=? WHERE id=?',(name,kind,gid))
         elif op in ('add_sub','save_sub'):
             name=_name(data.get('name'));gid=data.get('group_id')
             g=db.execute('SELECT * FROM ft3_category_groups WHERE id=?',(gid,)).fetchone()

@@ -19,7 +19,7 @@
       this.busy=true;this.error='';this.render();try{await this._hass.callWS({type:'finance_tracker/v2',op:'close_month',data:{month:this.month,account_id:id,actual_cents:cents}});delete this.edits[id];await this.refresh();}catch(e){this.busy=false;this.error=e.message||String(e);this.render();}
     }
     render(){const r=this.report,esc=x=>this.esc(x),m=x=>this.money(x);const dateLabel=month=>{const [y,mm]=month.split('-').map(Number);return new Intl.DateTimeFormat('de-DE',{month:'long',year:'numeric'}).format(new Date(y,mm-1,1));};
-      const hasReleasedPlan=(this.releasedPlanMonths||[]).includes(this.month)&&r?.month===this.month;const rows=hasReleasedPlan?(r?.accounts||[]):[];const groups=new Map();for(const a of rows){const owner=a.owner||'Gemeinsam';if(!groups.has(owner))groups.set(owner,[]);groups.get(owner).push(a);}
+      const hasReleasedPlan=(this.releasedPlanMonths||[]).includes(this.month)&&r?.month===this.month;const rows=hasReleasedPlan?(r?.accounts||[]):[];const groups=new Map();for(const a of rows){const owner=a.owner||'Nicht zugeordnet';if(!groups.has(owner))groups.set(owner,[]);groups.get(owner).push(a);}
       const totals=arr=>arr.reduce((s,a)=>s+Number(a.calculated_cents||0),0);
       const prevTotals=arr=>arr.every(a=>a.previous_confirmed_cents!=null)?m(arr.reduce((s,a)=>s+Number(a.previous_confirmed_cents),0)):'Nicht vollständig bestätigt';
       const accountsMarkup=[...groups].sort((a,b)=>a[0].localeCompare(b[0],'de')).map(([owner,accounts])=>{

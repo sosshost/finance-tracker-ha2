@@ -530,10 +530,63 @@ class Ledger:
                 opened = validate_day(data.get('opening_date') or date.today().isoformat())
                 if not name or len(name)>100 or kind not in ('checking','savings','cash'):
                     raise HomeAssistantError('Ungültiges Konto')
+                if abs(opening)>100000000000:
+                    raise HomeAssistantError('Eröffnungsbestand ist außerhalb des zulässigen Bereichs')
                 ident=uuid4().hex
                 db.execute('INSERT INTO ft_accounts VALUES(?,?,?,?,?,1,?)',(ident,name,kind,opening,opened,now()))
-                self._audit(db,op,{'id':ident,'name':name})
+                self._audit(db,op,{'id':ident,'name':name,'kind':kind,'opening_cents':opening,'opening_date':opened})
                 return {'id':ident}
+            if op == 'update_account':
+                ident=str(data.get('id',''))
+                row=db.execute('SELECT * FROM ft_accounts WHERE id=?',(ident,)).fetchone()
+                if not row:
+                    raise HomeAssistantError('Konto nicht gefunden')
+                name=str(data.get('name',row['name'])).strip()
+                kind=str(data.get('kind',row['kind']))
+                opening=int(data.get('opening_cents',row['opening_cents']))
+                opened=validate_day(data.get('opening_date') or row['opening_date'])
+                if not name or len(name)>100 or kind not in ('checking','savings','cash'):
+                    raise HomeAssistantError('Ungültiges Konto')
+                if abs(opening)>100000000000:
+                    raise HomeAssistantError('Eröffnungsbestand ist außerhalb des zulässigen Bereichs')
+                first_tx=db.execute('SELECT MIN(booked) FROM ft_transactions WHERE account_id=? AND voided=0',(ident,)).fetchone()[0]
+                if first_tx and opened>first_tx:
+                    raise HomeAssistantError('Eröffnungsdatum darf nicht nach der ersten vorhandenen Buchung liegen')
+                if (opening!=row['opening_cents'] or opened!=row['opening_date']) and db.execute('SELECT 1 FROM ft_closings WHERE account_id=? LIMIT 1',(ident,)).fetchone():
+                    raise HomeAssistantError('Eröffnungsdatum und Eröffnungsbestand können nach einem Monatsabschluss nicht mehr geändert werden')
+                before={'name':row['name'],'kind':row['kind'],'opening_cents':row['opening_cents'],'opening_date':row['opening_date']}
+                after={'name':name,'kind':kind,'opening_cents':opening,'opening_date':opened}
+                db.execute('UPDATE ft_accounts SET name=?,kind=?,opening_cents=?,opening_date=? WHERE id=?',(name,kind,opening,opened,ident))
+                self._audit(db,op,{'id':ident,'before':before,'after':after})
+                return {'updated':True,'id':ident}
+            if op == 'delete_account':
+                ident=str(data.get('id',''))
+                row=db.execute('SELECT * FROM ft_accounts WHERE id=?',(ident,)).fetchone()
+                if not row:
+                    raise HomeAssistantError('Konto nicht gefunden')
+                reference_columns={'account_id','to_account_id','from_account_id','source_account_id','target_account_id'}
+                references=[]
+                for table_row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+                    table=table_row['name']
+                    if table in {'ft_accounts','ft_account_meta','ft_account_owners','ft_audit'}:
+                        continue
+                    quoted='"'+table.replace('"','""')+'"'
+                    columns=[c['name'] for c in db.execute(f'PRAGMA table_info({quoted})')]
+                    for column in columns:
+                        if column not in reference_columns:
+                            continue
+                        qcol='"'+column.replace('"','""')+'"'
+                        count=db.execute(f'SELECT COUNT(*) FROM {quoted} WHERE {qcol}=?',(ident,)).fetchone()[0]
+                        if count:
+                            references.append((table,column,count))
+                if references:
+                    total=sum(item[2] for item in references)
+                    raise HomeAssistantError(f'Konto wird noch in {total} gespeicherten Datensatz/Datensätzen verwendet und kann nicht gelöscht werden')
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft_account_meta'").fetchone():
+                    db.execute('DELETE FROM ft_account_meta WHERE account_id=?',(ident,))
+                db.execute('DELETE FROM ft_accounts WHERE id=?',(ident,))
+                self._audit(db,op,{'id':ident,'name':row['name'],'opening_cents':row['opening_cents'],'opening_date':row['opening_date']})
+                return {'deleted':True,'id':ident}
             if op == 'add_category':
                 name=str(data.get('name','')).strip()
                 kind=str(data.get('kind','expense'))

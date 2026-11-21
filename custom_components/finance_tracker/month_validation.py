@@ -133,7 +133,7 @@ def validate_month_report(hass, month):
             previous_balance=(a['opening_cents']+db.execute('SELECT COALESCE(SUM(amount_cents),0) FROM ft_transactions WHERE account_id=? AND booked<=? AND voided=0',(aid,previous_day)).fetchone()[0]) if a['opening_date']<=previous_day else None
             movement=db.execute('SELECT COALESCE(SUM(amount_cents),0) FROM ft_transactions WHERE account_id=? AND booked>=? AND booked<? AND voided=0',(aid,first.isoformat(),end.isoformat())).fetchone()[0]
             meta=meta_rows.get(aid,{})
-            owner=meta.get('owner') or ('Maximus' if 'maximus' in a['name'].lower() else 'Edison' if 'edison' in a['name'].lower() else 'Gemeinsam')
+            owner=meta.get('owner') or 'Nicht zugeordnet'
             prev=previous_closings.get(aid)
             account_results.append({'account_id':aid,'name':meta.get('display_name') or a['name'],'owner':owner,'bank':meta.get('bank') or '', 'account_type':meta.get('account_type') or '',
               'previous_month':previous_month,'previous_calculated_cents':previous_balance,

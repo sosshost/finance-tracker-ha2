@@ -121,7 +121,7 @@ def _register_account_meta(hass: HomeAssistant) -> None:
     @websocket_api.websocket_command(
         {
             vol.Required("type"): "finance_tracker/account_meta",
-            vol.Required("op"): vol.In(["list", "save"]),
+            vol.Required("op"): vol.In(["list", "save", "owner_add", "owner_save", "owner_delete"]),
             vol.Optional("data", default={}): dict,
         }
     )
@@ -294,6 +294,8 @@ def _register_ledger(hass: HomeAssistant) -> None:
     operations = [
         "overview",
         "add_account",
+        "update_account",
+        "delete_account",
         "add_category",
         "add_transaction",
         "transfer",
