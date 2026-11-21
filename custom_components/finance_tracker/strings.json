@@ -1,0 +1,14 @@
+{
+  "title": "Finance Tracker",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Finance Tracker aktivieren",
+        "description": "Richtet den lokalen Arbeitsbereich für Haushaltsfinanzen ein. Es werden weder Cloud-Konto noch externe Zugangsdaten benötigt."
+      }
+    },
+    "abort": {
+      "already_configured": "Der lokale Finance Tracker ist bereits eingerichtet."
+    }
+  }
+}

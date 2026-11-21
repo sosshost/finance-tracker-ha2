@@ -1,0 +1,45 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # The historical upstream did not declare a license. Keep this
+          # explicit until the publisher closes the provenance/legal review.
+          ignore: license
+
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Compile Python
+        run: python -m compileall -q custom_components/finance_tracker
+      - name: Check JavaScript syntax
+        run: |
+          find custom_components/finance_tracker -name '*.js' -print0 | while IFS= read -r -d '' file; do
+            node --check "$file"
+          done

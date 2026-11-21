@@ -1,0 +1,10 @@
+"""Shared identifiers for the Finance Tracker integration."""
+
+DOMAIN = "finance_tracker"
+RUNTIME_READY_KEY = "runtime_ready"
+LEDGER_KEY = "ledger"
+REGISTERED_ASSETS_KEY = "registered_assets"
+SIDEBAR_PATH = "finance"
+SIDEBAR_TITLE = "Finance"
+SIDEBAR_ICON = "mdi:wallet-bifold"
+MAIN_PANEL_ELEMENT = "finance-tracker-unified-panel"

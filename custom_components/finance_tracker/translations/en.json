@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Activate Finance Tracker",
+        "description": "Set up the local household-finance workspace. No cloud account or external credentials are used."
+      }
+    },
+    "abort": {
+      "already_configured": "The local Finance Tracker workspace is already configured."
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "domain": "finance_tracker",
+  "name": "Finance Tracker HA2.0",
+  "version": "4.1.0",
+  "documentation": "https://github.com/sosshost/finance-tracker-ha2",
+  "issue_tracker": "https://github.com/sosshost/finance-tracker-ha2/issues",
+  "dependencies": [
+    "frontend",
+    "http",
+    "websocket_api"
+  ],
+  "codeowners": [
+    "@sosshost"
+  ],
+  "requirements": [],
+  "config_flow": true,
+  "iot_class": "local_push"
+}
