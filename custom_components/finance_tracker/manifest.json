@@ -1,6 +1,9 @@
 {
   "domain": "finance_tracker",
   "name": "Finance Tracker HA2.0",
+  "categories": [
+    "finance"
+  ],
   "codeowners": [
     "@sosshost"
   ],
