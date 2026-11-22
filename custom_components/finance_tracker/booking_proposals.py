@@ -112,6 +112,7 @@ def list_proposals(hass,month):
             out.append({'source_name':r['name'],'kind':kind,'planned_cents':planned_cents,
                         'actual_cents':actual_cents,'remaining_cents':remaining_cents,
                         'position_id':position_id,'category_id':categories.get(position_id) or mapped.get(key),'account_id':assignments.get(position_id),'source_cell':r.get('source_cell'),
+                        'lastschrift':(dict(db.execute('SELECT enabled,day,automatic FROM ft5_debit_positions WHERE month=? AND position_id=?',(month,position_id)).fetchone()) if position_id and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft5_debit_positions'").fetchone() and db.execute('SELECT 1 FROM ft5_debit_positions WHERE month=? AND position_id=?',(month,position_id)).fetchone() else None),
                         'status':status,'transaction_id':transaction_id,
                         'transaction_ids':transaction_ids,'linked_transactions':position_links,
                         'issue':None})

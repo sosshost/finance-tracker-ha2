@@ -23,6 +23,7 @@ _UI_ROOT = "/api/finance_tracker/ui"
 _ASSET_FILES: tuple[tuple[str, str], ...] = (
     ("main.js", "unified.js"),
     ("ledger.js", "entrypoint.js"),
+    ("planning.js", "planning_ui.js"),
     ("templates.js", "templates_ui.js"),
     ("closing.js", "closing_ui.js"),
 )

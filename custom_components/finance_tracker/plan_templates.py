@@ -2,6 +2,7 @@
 import sqlite3
 from uuid import uuid4
 from .ledger import validate_month, now
+from .direct_debit import SCHEMA as DEBIT_SCHEMA, _validate as validate_debit
 from .finance_planning import read_planning
 from homeassistant.exceptions import HomeAssistantError
 
@@ -15,7 +16,7 @@ def connect(hass):
  db=sqlite3.connect(hass.config.path('finance/household_v2.db'),timeout=5)
  db.row_factory=sqlite3.Row
  db.execute('PRAGMA foreign_keys=ON');db.execute('PRAGMA busy_timeout=5000')
- db.executescript(SCHEMA)
+ db.executescript(SCHEMA+DEBIT_SCHEMA)
  if 'deleted' not in {r['name'] for r in db.execute('PRAGMA table_info(ft3_templates)')}: db.execute('ALTER TABLE ft3_templates ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0')
  # Migration: legacy year-specific template months become annual calendar months.
  import json
@@ -72,7 +73,7 @@ def action(hass,op,data):
   if op=='list':
    templates=[]
    for r in db.execute('SELECT * FROM ft3_templates WHERE deleted=0 ORDER BY kind,name COLLATE NOCASE'):
-    t=dict(r);t['months']=json.loads(t['months']);t['to_account_id']=db.execute('SELECT to_account_id FROM ft4_transfer_template_targets WHERE template_id=?',(t['id'],)).fetchone();t['to_account_id']=t['to_account_id'][0] if t['to_account_id'] else None;templates.append(t)
+    t=dict(r);t['months']=json.loads(t['months']);debit=db.execute('SELECT * FROM ft5_debit_templates WHERE template_id=?',(t['id'],)).fetchone();t.update({k:debit[k] for k in ('enabled','day','automatic')}) if debit else t.update({'enabled':0,'day':None,'automatic':0});t['to_account_id']=db.execute('SELECT to_account_id FROM ft4_transfer_template_targets WHERE template_id=?',(t['id'],)).fetchone();t['to_account_id']=t['to_account_id'][0] if t['to_account_id'] else None;templates.append(t)
    return {'templates':templates}
   if op in ('source','import_from_plan'):
    # The plan remains the source of truth; never change its rows or posted transactions.
@@ -118,8 +119,10 @@ def action(hass,op,data):
     p['amount_cents']=(1 if p['kind']=='income' else -1)*abs(p['amount_cents'])
     inserts.append(p)
    for p in inserts:
+    tid=uuid4().hex
     db.execute('INSERT INTO ft3_templates(id,position_id,name,kind,amount_cents,category_id,account_id,months,active,updated) VALUES(?,?,?,?,?,?,?,?,1,?)',
-      (uuid4().hex,p['position_id'],p['name'],p['kind'],p['amount_cents'],p['category_id'],p['account_id'],json.dumps(chosen_months),now()))
+      (tid,p['position_id'],p['name'],p['kind'],p['amount_cents'],p['category_id'],p['account_id'],json.dumps(chosen_months),now()))
+    db.execute('INSERT OR IGNORE INTO ft5_debit_templates SELECT ?,enabled,day,automatic,account_id,to_account_id FROM ft5_debit_positions WHERE month=? AND position_id=?',(tid,month,p['position_id']))
    return {'created':len(inserts),'skipped':skipped,'months':chosen_months,'source_month':month}
   if op=='delete':
    ident=str(data.get('id') or '')
@@ -164,6 +167,12 @@ def action(hass,op,data):
     db.execute('INSERT INTO ft4_transfer_template_targets(template_id,to_account_id) VALUES(?,?) ON CONFLICT(template_id) DO UPDATE SET to_account_id=excluded.to_account_id',(ident,to_id))
    else:
     db.execute('DELETE FROM ft4_transfer_template_targets WHERE template_id=?',(ident,))
+   if 'debit_enabled' in data:
+    enabled=int(data.get('debit_enabled') is True);automatic=int(data.get('debit_automatic') is True)
+    day=int(data['debit_day']) if str(data.get('debit_day') or '').isdigit() else None
+    validate_debit(db,kind,enabled,day,automatic,aid,to_id)
+    db.execute('INSERT INTO ft5_debit_templates VALUES(?,?,?,?,?,?) ON CONFLICT(template_id) DO UPDATE SET enabled=excluded.enabled,day=excluded.day,automatic=excluded.automatic,account_id=excluded.account_id,to_account_id=excluded.to_account_id',
+      (ident,enabled,day if enabled else None,automatic if enabled else 0,aid,to_id or None))
    return {'saved':True,'id':ident}
   if op=='apply':
    tid=str(data.get('id') or '');months=sorted({validate_month(m) for m in data.get('months',[])});t=db.execute('SELECT * FROM ft3_templates WHERE id=? AND active=1 AND deleted=0',(tid,)).fetchone()
@@ -178,6 +187,7 @@ def action(hass,op,data):
     if not existing_item:
      db.execute('INSERT INTO ft3_template_plan_items VALUES(?,?,?,?,?,0)',
                 (month,tid,t['amount_cents'],t['category_id'],t['account_id']))
+    db.execute('INSERT OR IGNORE INTO ft5_debit_positions SELECT ?,?,enabled,day,automatic,account_id,to_account_id FROM ft5_debit_templates WHERE template_id=?',(month,'tpl:'+tid,tid))
     if t['kind']=='saving_transfer':
      target=db.execute('SELECT to_account_id FROM ft4_transfer_template_targets WHERE template_id=?',(tid,)).fetchone()
      if not target:raise HomeAssistantError('Zielkonto für Umbuchungsvorlage fehlt')
@@ -198,8 +208,23 @@ def action(hass,op,data):
    kind=kind if isinstance(kind,str) else kind['kind'] if kind else None
    verify(db,kind,cid,aid)
    amount=(1 if kind=='income' else -1)*abs(amount)
+   # Read all metadata from the authoritative source month. Propagate it as a coherent set.
+   source_debit=db.execute('SELECT enabled,day,automatic,account_id,to_account_id FROM ft5_debit_positions WHERE month=? AND position_id=?',(month,source)).fetchone()
+   if source_debit is None and source.startswith('tpl:'):
+    source_debit=db.execute('SELECT enabled,day,automatic,account_id,to_account_id FROM ft5_debit_templates WHERE template_id=?',(source[4:],)).fetchone()
+   if source_debit is None and template:
+    source_debit=db.execute('SELECT enabled,day,automatic,account_id,to_account_id FROM ft5_debit_templates WHERE template_id=?',(template['id'],)).fetchone()
+   source_debit=dict(source_debit) if source_debit else None
+   if source_debit and source_debit['enabled']:
+    # The selected booking account replaces the previous account in the propagated configuration.
+    validate_debit(db,kind,source_debit['enabled'],source_debit['day'],source_debit['automatic'],aid,source_debit['to_account_id'])
    if change_template:
     db.execute('UPDATE ft3_templates SET amount_cents=?,category_id=?,account_id=?,updated=? WHERE id=?',(amount,cid,aid,now(),template['id']))
+    if source_debit:
+     db.execute('''INSERT INTO ft5_debit_templates(template_id,enabled,day,automatic,account_id,to_account_id)
+       VALUES(?,?,?,?,?,?) ON CONFLICT(template_id) DO UPDATE SET enabled=excluded.enabled,day=excluded.day,
+       automatic=excluded.automatic,account_id=excluded.account_id,to_account_id=excluded.to_account_id''',
+       (template['id'],source_debit['enabled'],source_debit['day'],source_debit['automatic'],aid,source_debit['to_account_id']))
    changed=[];skipped=[]
    for m in scopes:
     if m<=month:continue
@@ -207,13 +232,21 @@ def action(hass,op,data):
     if not st or st['status']!='draft':skipped.append(m);continue
     if source.startswith('tpl:'):
      row=db.execute('SELECT customized FROM ft3_template_plan_items WHERE month=? AND template_id=?',(m,source[4:])).fetchone()
-     if not row or row['customized']:skipped.append(m);continue
-     db.execute('UPDATE ft3_template_plan_items SET amount_cents=?,category_id=?,account_id=? WHERE month=? AND template_id=?',(amount,cid,aid,m,source[4:]))
+     if not row:skipped.append(m);continue
+     # Explicitly selected target drafts are updated even if they had previous customizations.
+     db.execute('UPDATE ft3_template_plan_items SET amount_cents=?,category_id=?,account_id=?,customized=1 WHERE month=? AND template_id=?',(amount,cid,aid,m,source[4:]))
     else:
-     if db.execute('SELECT 1 FROM ft3_plan_values WHERE month=? AND position_id=?',(m,source)).fetchone():skipped.append(m);continue
-     db.execute('INSERT INTO ft3_plan_values VALUES(?,?,?,?)',(m,source,amount,now()))
-     if cid:db.execute('INSERT OR IGNORE INTO ft3_plan_categories VALUES(?,?,?)',(m,source,cid))
-     if aid:db.execute('INSERT OR IGNORE INTO ft3_plan_accounts VALUES(?,?,?,?)',(m,source,aid,now()))
+     if not db.execute('SELECT 1 FROM ft3_positions WHERE id=?',(source,)).fetchone():skipped.append(m);continue
+     db.execute('INSERT INTO ft3_plan_values VALUES(?,?,?,?) ON CONFLICT(month,position_id) DO UPDATE SET amount_cents=excluded.amount_cents,updated=excluded.updated',(m,source,amount,now()))
+     db.execute('INSERT INTO ft3_plan_categories VALUES(?,?,?) ON CONFLICT(month,position_id) DO UPDATE SET category_id=excluded.category_id',(m,source,cid))
+     if aid:
+      db.execute('INSERT INTO ft3_plan_accounts VALUES(?,?,?,?) ON CONFLICT(month,position_id) DO UPDATE SET account_id=excluded.account_id,updated=excluded.updated',(m,source,aid,now()))
+     else:db.execute('DELETE FROM ft3_plan_accounts WHERE month=? AND position_id=?',(m,source))
+    if source_debit:
+     db.execute('''INSERT INTO ft5_debit_positions(month,position_id,enabled,day,automatic,account_id,to_account_id)
+       VALUES(?,?,?,?,?,?,?) ON CONFLICT(month,position_id) DO UPDATE SET enabled=excluded.enabled,day=excluded.day,
+       automatic=excluded.automatic,account_id=excluded.account_id,to_account_id=excluded.to_account_id''',
+       (m,source,source_debit['enabled'],source_debit['day'],source_debit['automatic'],aid,source_debit['to_account_id']))
     changed.append(m)
    return {'updated':changed,'skipped':skipped,'template_updated':change_template}
   raise HomeAssistantError('Unbekannte Vorlagenaktion')

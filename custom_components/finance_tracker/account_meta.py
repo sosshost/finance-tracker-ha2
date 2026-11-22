@@ -56,6 +56,9 @@ def _ensure_schema(db: sqlite3.Connection) -> None:
             "ALTER TABLE ft_account_meta ADD COLUMN tolerance_cents INTEGER NOT NULL DEFAULT 0"
         )
 
+    db.execute("""CREATE TABLE IF NOT EXISTS ft5_debit_account_settings(
+       account_id TEXT PRIMARY KEY REFERENCES ft_accounts(id),
+       automatic INTEGER NOT NULL DEFAULT 0 CHECK(automatic IN (0,1)))""")
     db.execute(
         """CREATE TABLE IF NOT EXISTS ft_account_owners (
           name TEXT PRIMARY KEY COLLATE NOCASE,
@@ -143,6 +146,8 @@ def action(hass, op, data):
                        FROM ft_account_meta"""
                 )
             ]
+            enabled={r['account_id']:bool(r['automatic']) for r in db.execute('SELECT account_id,automatic FROM ft5_debit_account_settings')}
+            for a in accounts:a['automatic_debit']=enabled.get(a['account_id'],False)
             return {"accounts": accounts, "owners": owners}
 
         if op == "owner_add":
@@ -253,5 +258,10 @@ def action(hass, op, data):
                 _now(),
             ),
         )
+        if 'automatic_debit' in data:
+            enabled=data['automatic_debit']
+            if type(enabled) is not bool:raise HomeAssistantError('Kontofreigabe muss Ja/Nein sein')
+            db.execute('''INSERT INTO ft5_debit_account_settings(account_id,automatic) VALUES(?,?)
+              ON CONFLICT(account_id) DO UPDATE SET automatic=excluded.automatic''',(aid,int(enabled)))
         db.commit()
         return {"ok": True, "account_id": aid}

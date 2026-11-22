@@ -1,5 +1,6 @@
 """Read planning snapshots and non-destructive overlays."""
 import sqlite3
+from .closing_balance import differences
 from pathlib import Path
 KINDS=('income','expense','balance','saving_transfer','derived','household_aggregate','clearing','status')
 def read_planning(db_path,month=None):
@@ -79,4 +80,12 @@ def read_planning(db_path,month=None):
    if use_closing or plan:
     historical_months.append({'period':period,'income':income,'expense':expense,'source':'closing' if use_closing else 'plan'})
   totals={kind:sum(r.get('amount_cents') or 0 for r in rows if r['kind']==kind) for kind in KINDS}
-  return {'month':selected,'periods':periods,'released_plan_months':released_plan_months,'rows':rows,'balances':balances,'timeline':timeline,'historical_months':historical_months,'totals_cents':totals,'source':'Excel-Monatsplanung','note':'Keine Einzelbuchungen. Summen je Typ ohne abgeleitete Kontrollwerte; Kontostände sind Bestandsgrößen und nicht zu addieren.'}
+  closing_differences={}
+  if ledger_ready:
+   for (period,aid),v in differences(db).items():
+    closing_differences[period]=closing_differences.get(period,0)+v['actual']-v['calculated']
+   for period in list(closing_differences):
+    required={r[0] for r in db.execute('SELECT id FROM ft_accounts WHERE opening_date<=? AND active=1',(period+'-31',))}
+    confirmed={r[0] for r in db.execute('SELECT account_id FROM ft_closings WHERE month=?',(period,))}
+    if not required.issubset(confirmed): del closing_differences[period]
+  return {'closing_differences':closing_differences,'month':selected,'periods':periods,'released_plan_months':released_plan_months,'rows':rows,'balances':balances,'timeline':timeline,'historical_months':historical_months,'totals_cents':totals,'source':'Excel-Monatsplanung','note':'Keine Einzelbuchungen. Summen je Typ ohne abgeleitete Kontrollwerte; Kontostände sind Bestandsgrößen und nicht zu addieren.'}

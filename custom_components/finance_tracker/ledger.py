@@ -3,6 +3,7 @@
 All monetary amounts are signed integer cents; transfer pairs are atomic.
 """
 from __future__ import annotations
+from contextlib import contextmanager
 
 import sqlite3
 from datetime import date, datetime, timezone
@@ -48,6 +49,8 @@ def validate_month(value):
     return value
 
 
+from .closing_balance import balance, differences
+
 class Ledger:
     def __init__(self, hass):
         self.path = Path(hass.config.path('finance/household_v2.db'))
@@ -74,6 +77,9 @@ class Ledger:
         cols_closing={r['name'] for r in db.execute('PRAGMA table_info(ft_closings)')}
         if 'tolerance_cents' not in cols_closing: db.execute('ALTER TABLE ft_closings ADD COLUMN tolerance_cents INTEGER NOT NULL DEFAULT 0')
         if 'difference_cents' not in cols_closing: db.execute('ALTER TABLE ft_closings ADD COLUMN difference_cents INTEGER NOT NULL DEFAULT 0')
+        db.execute('CREATE TABLE IF NOT EXISTS ft_closing_drafts(month TEXT,account_id TEXT,actual_cents INTEGER NOT NULL,PRIMARY KEY(month,account_id))')
+        db.execute('CREATE TABLE IF NOT EXISTS ft_closing_history(id TEXT PRIMARY KEY,month TEXT,created TEXT,actor TEXT,action TEXT,payload TEXT)')
+        db.commit()
         return db
 
     def _attach_expressions(self, db, transactions):
@@ -120,10 +126,7 @@ class Ledger:
         db.execute('INSERT INTO ft_audit VALUES(?,?,?,?)',(uuid4().hex,now(),action,json.dumps(payload,ensure_ascii=False)))
 
     def _ensure_open(self, db, booked, account_ids):
-        month = booked[:7]
-        for account_id in account_ids:
-            if db.execute('SELECT 1 FROM ft_closings WHERE month>=? AND account_id=?',(month,account_id)).fetchone():
-                raise HomeAssistantError('Dieser oder ein späterer Monat ist für das Konto bereits abgeschlossen')
+        return None  # Confirmed balances are reference points, not locks.
 
     def _account(self, db, account_id):
         row = db.execute('SELECT * FROM ft_accounts WHERE id=? AND active=1',(account_id,)).fetchone()
@@ -132,10 +135,33 @@ class Ledger:
         return row
 
     def _balance(self, db, account, through=None):
-        clause = ' AND booked<=?' if through else ''
-        params = (account['id'], through) if through else (account['id'],)
-        row = db.execute('SELECT COALESCE(SUM(amount_cents),0) AS total FROM ft_transactions WHERE account_id=? AND voided=0'+clause,params).fetchone()
-        return account['opening_cents'] + row['total']
+        return balance(db,account,through)
+
+    @contextmanager
+    def _operation(self, op, data):
+        import json
+        db=self._db()
+        try:
+            with db:
+                mutations={'add_transaction','transfer','edit_transaction','edit_transfer','void_transaction','post_recurring','close_month','confirm_closing'}
+                track=op in mutations
+                if track: db.execute('BEGIN IMMEDIATE')
+                before=differences(db) if track else {}
+                audit_before=db.execute('SELECT COALESCE(MAX(rowid),0) FROM ft_audit').fetchone()[0] if track else 0
+                yield db
+                if track:
+                    after=differences(db)
+                    events=[dict(r) for r in db.execute('SELECT * FROM ft_audit WHERE rowid>?',(audit_before,))]
+                    for key,new in after.items():
+                        old=before.get(key)
+                        if old != new:
+                            db.execute('UPDATE ft_closings SET calculated_cents=?,difference_cents=? WHERE month=? AND account_id=?',(new['calculated'],new['actual']-new['calculated'],*key))
+                        if old is not None and (old!=new or any(key[0] in str(e) and key[1] in str(e) for e in events)):
+                            db.execute('INSERT INTO ft_closing_history VALUES(?,?,?,?,?,?)',(uuid4().hex,key[0],now(),data.get('_actor',''),op,json.dumps({'account_id':key[1],'before':old,'after':new,'events':events},ensure_ascii=False)))
+                        elif old is None:
+                            db.execute('INSERT INTO ft_closing_history VALUES(?,?,?,?,?,?)',(uuid4().hex,key[0],now(),data.get('_actor',''), 'initial_close',json.dumps({'account_id':key[1],'before':new,'after':new,'events':events},ensure_ascii=False)))
+        finally:
+            db.close()
 
     def _transaction(self, db, transaction_id):
         row = db.execute('SELECT * FROM ft_transactions WHERE id=? AND voided=0', (transaction_id,)).fetchone()
@@ -150,7 +176,7 @@ class Ledger:
                 raise HomeAssistantError('Kategorie passt nicht zur Buchung')
 
     def execute(self, op, data):
-        with self._db() as db:
+        with self._operation(op,data) as db:
             if op == 'overview':
                 accounts = [dict(r) for r in db.execute('SELECT * FROM ft_accounts ORDER BY name')]
                 for a in accounts:
@@ -184,7 +210,7 @@ class Ledger:
                 income = sum(t['amount_cents'] for t in transactions if t['kind']=='income')
                 expense = -sum(t['amount_cents'] for t in transactions if t['kind']=='expense')
                 closings = [dict(r) for r in db.execute('SELECT * FROM ft_closings WHERE month=?',(month,))]
-                locked_accounts = [r['account_id'] for r in db.execute('SELECT DISTINCT account_id FROM ft_closings WHERE month>=?',(month,))]
+                locked_accounts = []
                 recurring = [dict(r) for r in db.execute('SELECT * FROM ft_recurring ORDER BY name')]
                 audit_count = db.execute('SELECT COUNT(*) AS n FROM ft_audit').fetchone()['n']
                 return {'recurring':recurring,'audit_count':audit_count,'accounts':accounts,'categories':categories,'transactions':transactions,'closings':closings,'month':month,'income_cents':income,'expense_cents':expense,'total_cents':sum(a['balance_cents'] for a in accounts),'transactions_truncated':len(transactions)==500,'locked_accounts':locked_accounts}
@@ -438,7 +464,7 @@ class Ledger:
                     payload=json.loads(item['payload'])
                     if payload.get('id')==ident or ident in payload.get('ids',[]):
                         events.append({'at':item['at'],'action':item['action'],'payload':payload})
-                return {'transaction':dict(row),'events':events,'locked':bool(db.execute('SELECT 1 FROM ft_closings WHERE month>=? AND account_id=?',(row['booked'][:7],row['account_id'])).fetchone())}
+                return {'transaction':dict(row),'events':events,'locked':False}
             if op == 'month_summary':
                 month=validate_month(data.get('month') or date.today().strftime('%Y-%m'))
                 totals=db.execute("SELECT kind,COALESCE(SUM(amount_cents),0) AS amount,COUNT(*) AS n FROM ft_transactions WHERE booked LIKE ? AND voided=0 GROUP BY kind",(month+'%',)).fetchall()
@@ -658,6 +684,10 @@ class Ledger:
                     self._ensure_open(db, row['booked'], [row['account_id']])
                 for row in rows:
                     db.execute('UPDATE ft_transactions SET voided=1 WHERE id=?', (row['id'],))
+                    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft4_plan_actual_links'").fetchone():
+                        links=[dict(x) for x in db.execute('SELECT * FROM ft4_plan_actual_links WHERE transaction_id=?',(row['id'],))]
+                        if links: self._audit(db,'plan_actual_remove_transaction',{'month':row['booked'][:7],'transaction_id':row['id'],'links':links})
+                        db.execute('DELETE FROM ft4_plan_actual_links WHERE transaction_id=?',(row['id'],))
                 self._audit(db, op, {'ids': [r['id'] for r in rows], 'reason': reason,
                                       'before': [dict(r) for r in rows]})
                 return {'voided': len(rows)}
@@ -734,26 +764,29 @@ class Ledger:
                                      'after': {'booked': booked, 'account_id': account_id, 'category_id': category_id,
                                                'kind': kind, 'amount_cents': signed, 'description': description}})
                 return {'updated': True}
-            if op == 'close_month':
+            if op == 'closing_history':
+                return [dict(r) for r in db.execute('SELECT * FROM ft_closing_history WHERE month=? ORDER BY created DESC,rowid DESC',(validate_month(data.get('month')),))]
+            if op == 'save_closing_draft':
+                month=validate_month(data.get('month'));aid=str(data.get('account_id',''));actual=int(data['actual_cents'])
+                account=self._account(db,aid)
+                if month<account['opening_date'][:7]: raise HomeAssistantError('Monat vor Kontoeröffnung')
+                db.execute('INSERT INTO ft_closing_drafts VALUES(?,?,?) ON CONFLICT(month,account_id) DO UPDATE SET actual_cents=excluded.actual_cents',(month,aid,actual))
+                return {'saved':True}
+            if op in ('confirm_closing','close_month'):
                 month=validate_month(data.get('month'))
-                account_id=str(data.get('account_id',''))
-                actual=int(data.get('actual_cents'))
-                account=self._account(db,account_id)
-                if month < account['opening_date'][:7]:
-                    raise HomeAssistantError('Monat vor Kontoeröffnung')
-                if db.execute('SELECT 1 FROM ft_closings WHERE month=? AND account_id=?',(month,account_id)).fetchone():
-                    raise HomeAssistantError('Konto für Monat bereits abgeschlossen')
-                calculated=self._balance(db,account,month+'-31')
-                # Account metadata is optional for legacy installations; 0 cents is the safe default.
-                meta_table=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft_account_meta'").fetchone()
-                tolerance=0
-                if meta_table and 'tolerance_cents' in {r['name'] for r in db.execute('PRAGMA table_info(ft_account_meta)')}:
-                    meta=db.execute('SELECT tolerance_cents FROM ft_account_meta WHERE account_id=?',(account_id,)).fetchone()
-                    tolerance=int(meta['tolerance_cents']) if meta else 0
-                difference=actual-calculated
-                if abs(difference)>tolerance:
-                    raise HomeAssistantError(f'Kontodifferenz: {difference} Cent; erlaubt: ±{tolerance} Cent.')
-                db.execute('INSERT INTO ft_closings(month,account_id,actual_cents,calculated_cents,closed,tolerance_cents,difference_cents) VALUES(?,?,?,?,?,?,?)',(month,account_id,actual,calculated,now(),tolerance,difference))
-                self._audit(db,op,{'month':month,'account_id':account_id,'balance_cents':actual,'calculated_cents':calculated,'difference_cents':difference,'tolerance_cents':tolerance})
-                return {'closed':True,'difference_cents':difference,'tolerance_cents':tolerance}
+                accounts=[dict(r) for r in db.execute('SELECT * FROM ft_accounts WHERE opening_date<=? AND (active=1 OR id IN (SELECT account_id FROM ft_closings WHERE month=?))',(month+'-31',month))]
+                existing={r['account_id']:r['actual_cents'] for r in db.execute('SELECT * FROM ft_closings WHERE month=?',(month,))}
+                drafts={r['account_id']:r['actual_cents'] for r in db.execute('SELECT * FROM ft_closing_drafts WHERE month=?',(month,))}
+                if op=='close_month':
+                    aid=str(data.get('account_id','')); self._account(db,aid)
+                    if aid not in existing: raise HomeAssistantError('Bitte zunächst Monatsabschluss bestätigen')
+                    drafts={aid:int(data['actual_cents'])};accounts=[a for a in accounts if a['id']==aid]
+                values={**existing,**drafts}
+                if not accounts or any(a['id'] not in values for a in accounts): raise HomeAssistantError('Kontenabgleich nicht vollständig')
+                for account in accounts:
+                    aid=account['id'];actual=values[aid];calculated=balance(db,account,month+'-31',False)
+                    db.execute('INSERT INTO ft_closings(month,account_id,actual_cents,calculated_cents,closed,tolerance_cents,difference_cents) VALUES(?,?,?,?,?,?,?) ON CONFLICT(month,account_id) DO UPDATE SET actual_cents=excluded.actual_cents,calculated_cents=excluded.calculated_cents,difference_cents=excluded.difference_cents',(month,aid,actual,calculated,now(),0,actual-calculated))
+                    self._audit(db,op,{'month':month,'account_id':aid,'before':existing.get(aid),'actual_cents':actual,'calculated_cents':calculated})
+                if op=='confirm_closing': db.execute('DELETE FROM ft_closing_drafts WHERE month=?',(month,))
+                return {'closed':True}
             raise HomeAssistantError('Unbekannte Aktion')

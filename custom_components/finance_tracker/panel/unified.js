@@ -35,7 +35,7 @@
       alert:(title,message,opts={})=>openDialog({title,message,kind:'alert',...opts})
     };
   }
-  const tag = 'finance-tracker-unified-panel';
+  const tag = 'finance-tracker-unified-panel-v413';
   if (customElements.get(tag)) return;
   class Unified extends HTMLElement {
     constructor() {
@@ -81,7 +81,7 @@
       const bar=this.shadowRoot.querySelector('.bar');if(!bar)return;
       // Transform only: NEVER change margin, height or layout flow during scrolling.
       const height=bar.offsetHeight||0;
-      bar.style.transform=this._headerCollapsed?'translate3d(0,-100%,0)':'translate3d(0,0,0)';
+      bar.style.transform=this._headerCollapsed?`translate3d(0,-${height}px,0)`:'translate3d(0,0,0)';
       // One-pixel opaque overlap prevents content shining through at fractional zoom/device pixel ratios.
       const top=this._headerCollapsed?'0px':`${Math.max(0,Math.ceil(height)-1)}px`;
       if(this._lastStickyTop!==top){this.style.setProperty('--ft-sticky-top',top);this._lastStickyTop=top;}
@@ -108,7 +108,7 @@
       const collapsed=direction>0&&y>130;
       if(collapsed!==this._headerCollapsed){
         this._headerCollapsed=collapsed;
-        this._headerTransitionUntil=performance.now()+380;
+        this._headerTransitionUntil=performance.now()+460;
         this._syncHeader();
       }
       this._scrollAnchor=y;
@@ -123,23 +123,37 @@
       this.started=true;
       this.error='';
       const modules=[
-        ['finance-tracker-panel-2-3-1-s22','/api/finance_tracker/ui/ledger.js?v=41_1_1_J12_HF1'],
-        ['finance-tracker-planning-panel-s22','/api/finance_tracker/ui/planning.js?v=41_1_1_J12_HF1'],
-        ['finance-tracker-templates-panel-s24','/api/finance_tracker/ui/templates.js?v=41_1_1_J12_HF1'],
-        ['finance-tracker-closing-panel-v21','/api/finance_tracker/ui/closing.js?v=41_1_1_J12_HF1']
+        ['finance-tracker-panel-v413','/api/finance_tracker/ui/ledger.js?v=4_1_3'],
+        ['finance-tracker-planning-panel-v413','/api/finance_tracker/ui/planning.js?v=4_1_3'],
+        ['finance-tracker-templates-panel-v413','/api/finance_tracker/ui/templates.js?v=4_1_3'],
+        ['finance-tracker-closing-panel-v413','/api/finance_tracker/ui/closing.js?v=4_1_3']
       ];
       try {
         for(const [name,url] of modules) {
-          if(!customElements.get(name)) {
-            await new Promise((resolve,reject)=>{
-              const script=document.createElement('script');
-              const timer=setTimeout(()=>{script.remove();reject(new Error('Zeitüberschreitung beim Laden: '+url));},12000);
-              script.src=url; script.onload=()=>{clearTimeout(timer);resolve();};
-              script.onerror=()=>{clearTimeout(timer);reject(new Error('Frontend-Modul nicht ladbar: '+url));};
-              document.head.appendChild(script);
-            });
+          if(customElements.get(name))continue;
+          let lastError=null;
+          // A loaded script is not necessarily an executed/registered component.
+          // Reload with a unique URL when a stale intermediary cache returns old JS.
+          for(let attempt=0;attempt<2&&!customElements.get(name);attempt++){
+            const requestUrl=url+'&ft_retry='+Date.now()+'_'+attempt;
+            let runtimeError=null;
+            const capture=e=>{if(!runtimeError)runtimeError=e.message||String(e.error||e);};
+            window.addEventListener('error',capture);
+            try{
+              await new Promise((resolve,reject)=>{
+                const script=document.createElement('script');
+                const timer=setTimeout(()=>{script.remove();reject(new Error('Zeitüberschreitung beim Laden: '+requestUrl));},12000);
+                script.src=requestUrl;
+                script.onload=()=>{clearTimeout(timer);resolve();};
+                script.onerror=()=>{clearTimeout(timer);reject(new Error('Frontend-Modul nicht ladbar: '+requestUrl));};
+                document.head.appendChild(script);
+              });
+              // customElements.define() runs synchronously for these classic scripts.
+              if(!customElements.get(name))lastError=new Error('Modul nicht registriert: '+name+(runtimeError?' ('+runtimeError+')':''));
+            }catch(e){lastError=e;}
+            finally{window.removeEventListener('error',capture);}
           }
-          if(!customElements.get(name)) await Promise.race([customElements.whenDefined(name),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Modul nicht registriert: '+name)),12000))]);
+          if(!customElements.get(name))throw lastError||new Error('Modul nicht registriert: '+name);
         }
         this.ready=true;
         this.mountOnce();
@@ -156,16 +170,17 @@
       this.shadowRoot.innerHTML=`<style>
         :host{display:block;min-height:100vh;background:var(--primary-background-color,#111827);color:var(--primary-text-color,#e8edf3);font:inherit}
         *{box-sizing:border-box}
-        .bar{position:sticky;top:0;z-index:200000;transition:transform .28s cubic-bezier(.22,1,.36,1);will-change:transform;background:var(--card-background-color,#1e293b);border-bottom:1px solid var(--divider-color,#394657);padding:12px clamp(12px,3vw,26px)}
-        .inner{max-width:1180px;margin:auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap;position:relative;padding-right:48px}
+        .bar{position:sticky;top:0;z-index:200000;transition:transform .42s cubic-bezier(.4,0,.2,1)!important;will-change:transform;backface-visibility:hidden;background:var(--card-background-color,#1e293b);border-bottom:1px solid var(--divider-color,#394657);padding:12px clamp(12px,3vw,26px)}
+        @media (prefers-reduced-motion:reduce){.bar{transition:none!important}}
+        .inner{max-width:1180px;margin:auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap;position:relative;padding-right:0}
         .brand{font-size:18px;font-weight:750;letter-spacing:.1px}
         .tag{font-size:11px;color:var(--secondary-text-color,#98a4b7)}
-        .nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-left:auto;min-width:min(100%,360px)}
+        .nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-left:0;width:100%;min-width:0;flex:0 0 100%}
         button{font:inherit;padding:9px 15px;border-radius:10px;border:1px solid var(--divider-color,#394657);background:transparent;color:inherit;cursor:pointer;min-height:40px}
         button[aria-selected="true"]{background:var(--primary-color,#4c9aff);color:#fff;border-color:transparent}
         button:focus-visible{outline:2px solid var(--primary-color,#4c9aff);outline-offset:2px}
         .subnav{display:none!important}
-        .help-button{position:absolute;right:0;top:0;width:40px;min-width:40px;height:40px;padding:0;border-radius:50%;display:grid;place-items:center;font-size:20px;font-weight:800;background:var(--secondary-background-color,#29364a)}
+        .help-button{position:absolute;right:0;top:0;width:28px;min-width:28px;height:28px;min-height:28px;padding:0;border-radius:50%;display:grid;place-items:center;font-size:15px;font-weight:800;background:var(--secondary-background-color,#29364a)}
         .help-overlay{position:fixed;inset:0;z-index:300000;display:flex;align-items:center;justify-content:center;padding:14px}
         .help-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.74)}
         .help-dialog{position:relative;width:min(100%,720px);max-height:min(88dvh,820px);display:flex;flex-direction:column;background:var(--card-background-color,#1b2633);border:1px solid var(--divider-color,#3d4b59);border-radius:17px;overflow:hidden;box-shadow:0 18px 70px #0009}
@@ -175,11 +190,26 @@
         .help-body h3{font-size:15px;margin:20px 0 7px;color:var(--primary-color,#4c9aff)}.help-body h3:first-child{margin-top:0}
         .help-body p{margin:5px 0 10px;color:var(--secondary-text-color,#a8b2c1)}.help-body ol,.help-body ul{margin:7px 0 12px;padding-left:22px}.help-body li{margin:5px 0}
         .help-note{padding:11px 12px;border:1px solid var(--divider-color,#394657);border-radius:10px;background:var(--secondary-background-color,#29364a)}
+        .help-chapter{border:1px solid var(--divider-color,#394657);border-radius:12px;margin:0 0 10px;background:var(--card-background-color,#1b2633);overflow:hidden}
+        .help-chapter>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:9px;padding:12px 13px;font-weight:700;font-size:14px}
+        .help-chapter>summary::-webkit-details-marker{display:none}
+        .help-chapter>summary:after{content:'⌄';margin-left:auto;color:var(--secondary-text-color,#a8b2c1);transition:transform .2s}
+        .help-chapter[open]>summary:after{transform:rotate(180deg)}
+        .help-chapter[open]>summary{border-bottom:1px solid var(--divider-color,#394657)}
+        .help-chapter-content{padding:12px 13px 14px;display:grid;gap:10px}
+        .help-chapter-content p{margin:0}
+        .help-fieldset{border:1px solid var(--divider-color,#394657);border-radius:10px;margin:2px 0;padding:10px 12px}
+        .help-fieldset legend{font-size:12px;font-weight:700;padding:0 6px;color:var(--primary-text-color,#e8edf3)}
+        .help-fieldset p{font-size:12px;line-height:1.55}
+        .help-fieldset strong{color:var(--primary-text-color,#e8edf3)}
+        .help-chapter details.help-chapter{margin:0}
+        .help-body .help-intro{font-size:12px;margin:0 0 12px}
+        @media(prefers-reduced-motion:reduce){.help-chapter>summary:after{transition:none}.bar{transition:none!important}}
         .info{max-width:1180px;margin:20px auto;padding:15px;border:1px solid var(--divider-color,#394657);border-radius:12px}
         [hidden]{display:none!important}
-        @media(max-width:540px){.bar{padding:10px}.inner{gap:8px;padding-right:44px}.brand{font-size:16px}.nav{width:100%;margin-left:0}.nav button{padding:9px 5px;font-size:12px;min-width:0}.help-dialog{max-height:92dvh}.help-body{padding:14px}}
+        @media(max-width:540px){.bar{padding:10px}.inner{gap:8px;padding-right:0}.brand{font-size:16px}.nav{width:100%;margin-left:0}.nav button{padding:9px 5px;font-size:12px;min-width:0}.help-dialog{max-height:92dvh}.help-body{padding:14px}}
       </style>
-      <header class="bar"><div class="inner"><div><div class="brand">Finance Tracker <span class="tag">4.1.1</span></div><div class="tag">Haushaltsfinanzen · HA2.0</div></div><button type="button" id="help-open" class="help-button" aria-label="Hilfe öffnen" title="Hilfe">?</button>
+      <header class="bar"><div class="inner"><div><div class="brand">Finance Tracker <span class="tag">4.1.3</span></div><div class="tag">Haushaltsfinanzen · HA2.0</div></div><button type="button" id="help-open" class="help-button" aria-label="Hilfe öffnen" title="Hilfe">?</button>
       <nav class="nav" aria-label="Finance Tracker Bereiche">
       <button type="button" data-tab="master" aria-selected="false" aria-controls="ledger">Stammdaten</button>
       <button type="button" data-tab="planning" aria-selected="false" aria-controls="planning">Finanzplanung</button>
@@ -188,7 +218,12 @@
       </nav></div></header>
       <div id="status" class="info" role="status">Oberfläche wird geladen …</div>
       <div id="content" hidden><section id="templates" aria-label="Monatsvorlage" hidden></section><section id="planning" aria-label="Finanzplanung" hidden></section><section id="ledger" aria-label="Monatsübersicht"></section><section id="closing" aria-label="Abschluss" hidden></section></div>
-      <div id="help-overlay" class="help-overlay" hidden><div class="help-backdrop" data-help-close></div><section class="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><header class="help-head"><div><div class="tag">Finance Tracker 4.1.1</div><strong id="help-title">Hilfe & Ersteinrichtung</strong></div><button type="button" data-help-close aria-label="Hilfe schließen">✕</button></header><div class="help-body"><h3>Ersteinrichtung</h3><ol><li>Unter <strong>Stammdaten → Kontoinhaber</strong> zuerst alle benötigten Inhaber anlegen.</li><li>Unter <strong>Stammdaten → Kontenverwaltung</strong> die Konten mit Inhaber, Kontotyp, Bank, Eröffnungsdatum und Eröffnungsbestand anlegen.</li><li>Unter <strong>Stammdaten → Kategorien</strong> die benötigten Ober- und Unterkategorien prüfen oder ergänzen.</li><li>Danach kann unter <strong>Finanzplanung</strong> ein Monatsplan aufgebaut oder eine Monatsvorlage gepflegt werden.</li></ol><div class="help-note"><strong>Eröffnungsbestand:</strong> Der Stand gilt zum angegebenen Eröffnungsdatum und bildet die Ausgangsbasis für alle späteren Buchungen.</div><h3>Konten & Inhaber verwalten</h3><p>Kontoinhaber können angelegt, umbenannt und gelöscht werden. Löschen ist nur möglich, wenn kein Konto mehr zugeordnet ist.</p><p>Konten können angelegt und bearbeitet werden. Ein Konto kann nur vollständig gelöscht werden, solange keine Buchungen, Planungen, Vorlagen oder Monatsabschlüsse darauf verweisen. So bleiben historische Daten und Plan-Ist-Zuordnungen intakt.</p><h3>Buchungen</h3><p>Neue Buchungen werden in der Monatsübersicht erfasst. Einnahme/Ausgabe bestimmt das Vorzeichen; der Betrag selbst wird positiv eingegeben. Umbuchungen verschieben Geld zwischen zwei Konten.</p><h3>Finanzplanung & Plan-Ist</h3><p>Monatspositionen bilden den Plan. Buchungen können bereits beim Erfassen oder später im Plan-Ist-Vergleich einer Planposition zugeordnet werden. Vorlagen dienen als wiederverwendbare Grundlage für weitere Monate.</p><h3>Monatsabschluss</h3><p>Vor dem Abschluss Kontenstände, offene Planpositionen, Abweichungen und Zuordnungslücken prüfen. Abgeschlossene Monate sind geschützt und sollen nur über nachvollziehbare Korrekturen verändert werden.</p><h3>Empfohlene Reihenfolge</h3><p>Kontoinhaber → Konten → Kategorien → Monatsplanung/Vorlage → Buchungen → Plan-Ist-Prüfung → Monatsabschluss.</p></div></section></div>`;
+      <div id="help-overlay" class="help-overlay" hidden><div class="help-backdrop" data-help-close></div><section class="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><header class="help-head"><div><div class="tag">Finance Tracker 4.1.3</div><strong id="help-title">Hilfe · Kapitelübersicht</strong></div><button type="button" data-help-close aria-label="Hilfe schließen">✕</button></header><div class="help-body"><p class="help-intro">Kapitel zum Aufklappen auswählen. Pflichtangaben und optionale Angaben sind jeweils getrennt beschrieben.</p>
+<details class="help-chapter"><summary>0 | Ersteinrichtung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Einrichtungsreihenfolge</legend><p>Kontoinhaber, Konten und Eröffnungsbestände anlegen; Kategorien prüfen; anschließend Monatsplanung erstellen und Buchungen erfassen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Bankbezeichnungen, Kontofavoriten und Monatsvorlagen können die spätere Bedienung erleichtern.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Eröffnungsbestand zu einem festen Stichtag übernehmen. Buchungen, die darin bereits enthalten sind, nicht erneut erfassen.</p></fieldset></div></details>
+<details class="help-chapter"><summary>1 | Stammdaten</summary><div class="help-chapter-content"><details class="help-chapter"><summary>1.1 | Kontenverwaltung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Kontenverwaltung</legend><p>Kontoinhaber, Kontoname, Kontotyp, Eröffnungsdatum und Eröffnungsbestand hinterlegen. Für Lastschrift ist ein Konto erforderlich; Umbuchungen benötigen zwei unterschiedliche Konten.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Bank, Anzeigename, Favoriten, Kontodifferenz-Toleranz und kontospezifische Automatikfreigabe.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Umbuchung Giro → Tagesgeld: Giro als Quellkonto und Tagesgeld als Zielkonto auswählen. Automatik benötigt die Freigabe beider Konten.</p></fieldset></div></details><details class="help-chapter"><summary>1.2 | Kontoinhaber</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Kontoinhaber</legend><p>Mindestens einen Inhaber anlegen und jedem Konto zuordnen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Weitere Inhaber zur Trennung von Kontogruppen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Kurze, eindeutige Namen verwenden; ein Inhaber mit Konten kann nicht gelöscht werden.</p></fieldset></div></details><details class="help-chapter"><summary>1.3 | Kategorien</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Kategorien</legend><p>Für Buchungen passende Einnahmen- und Ausgabenkategorien bereitstellen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Unterkategorien für detailliertere Auswertungen ergänzen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Ausgaben → Versicherungen → Kfz-Versicherung.</p></fieldset></div></details></div></details>
+<details class="help-chapter"><summary>2 | Finanzplanung</summary><div class="help-chapter-content"><details class="help-chapter"><summary>2.1 | Monatsplanung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Monatsplanung</legend><p>Monat, Bezeichnung, Art und Planbetrag erfassen. Bei Lastschrift Buchungstag und Konto, bei Umbuchung zusätzlich ein abweichendes Zielkonto angeben.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Lastschrift, positionsbezogene Automatik, Vorlage und Übernahme in offene Monatsentwürfe.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Versicherung mit 49,95 € zum 15. planen; Automatik nur bei verlässlichem Betrag aktivieren.</p></fieldset></div></details><details class="help-chapter"><summary>2.2 | Monatsvorlage</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Monatsvorlage</legend><p>Bezeichnung, Art, Betrag und gültige Kalendermonate festlegen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Kategorie und Konto ergänzen; bei Lastschrift ist das Konto verpflichtend.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Jährliche Kfz-Versicherung nur im zutreffenden Monat auswählen. Grüne Monatsschaltflächen kennzeichnen die Auswahl.</p></fieldset></div></details><details class="help-chapter"><summary>2.3 | Monatsentwicklung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Monatsentwicklung</legend><p>Für einen aussagekräftigen Verlauf müssen entsprechende Planmonate vorhanden sein.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Monatliche Entwicklungen und Abweichungen zur Orientierung vergleichen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Wiederkehrende Kosten über mehrere Monate betrachten, statt einen Einzelmonat isoliert zu bewerten.</p></fieldset></div></details><details class="help-chapter"><summary>2.4 | Plan-Ist-Vergleich</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Plan-Ist-Vergleich</legend><p>Planpositionen und zugeordnete Ist-Buchungen kontrollieren.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Fehlende Zuordnungen ergänzen und Abweichungen nachbearbeiten.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Plan 50 €, Ist 49,95 €: Zuordnung herstellen, Differenz bleibt sichtbar.</p></fieldset></div></details></div></details>
+<details class="help-chapter"><summary>3 | Monatsübersicht</summary><div class="help-chapter-content"><details class="help-chapter"><summary>3.1 | Buchungen nach Kategorie</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Buchungen nach Kategorie</legend><p>Buchungen mit Art, Datum, Konto und Betrag erfassen; bei Umbuchung zwei verschiedene Konten angeben.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Kategoriebezogene Auswertung und Plan-Ist-Zuordnung nutzen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Betrag positiv erfassen; die Buchungsart legt die Richtung fest.</p></fieldset></div></details><details class="help-chapter"><summary>3.2 | Buchungen nach Konto</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Buchungen nach Konto</legend><p>Für Buchungen ist eine gültige Kontozuordnung erforderlich.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Buchungen nach Konto kontrollieren und filtern.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Kontobewegungen mit dem tatsächlichen Kontoauszug vergleichen.</p></fieldset></div></details><details class="help-chapter"><summary>3.3 | Vorschläge aus Planung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Vorschläge aus Planung</legend><p>Vorschläge vor der Bestätigung prüfen, insbesondere Konto, Betrag und Art.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Plan-Ist-Zuordnung und Änderungen vor Bestätigung anpassen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Ein automatisch erzeugter Eintrag ist keine bankseitig bestätigte Zahlung.</p></fieldset></div></details><details class="help-chapter"><summary>3.4 | Änderungen</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Änderungen</legend><p>Bei Korrekturen den betroffenen Buchungs- und Monatsbezug prüfen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Änderungsprotokolle zur Nachverfolgung verwenden.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Bei Abweichungen zunächst Buchung und Zuordnung prüfen.</p></fieldset></div></details></div></details>
+<details class="help-chapter"><summary>4 | Abschluss</summary><div class="help-chapter-content"><details class="help-chapter"><summary>4.1 | Abschluss</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Abschluss</legend><p>Kontenstände, offene Positionen, Plan-Ist-Abweichungen und Prüfbefunde kontrollieren.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Prüfbefunde öffnen und gezielt nacharbeiten.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Erwartete Lastschriften können von Bankumsätzen abweichen: Kontenabgleich auch bei Automatik durchführen.</p></fieldset></div></details><details class="help-chapter"><summary>4.2 | Änderungen</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Änderungen</legend><p>Nachträgliche Abschlusskorrekturen auf Konto und Zeitraum prüfen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Änderungshistorie zur Nachvollziehbarkeit ansehen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Nach einer Kontenstandkorrektur die dokumentierte Differenz vor und nach der Änderung vergleichen.</p></fieldset></div></details></div></details></div></section></div>`;
       if(typeof ResizeObserver!=='undefined'){this._headerObserver?.disconnect();this._headerObserver=new ResizeObserver(()=>this._syncHeader());this._headerObserver.observe(this.shadowRoot.querySelector('.bar'));}
       this.shadowRoot.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>this.selectTab(b.dataset.tab)));
       const help=this.shadowRoot.getElementById('help-overlay');
@@ -222,6 +257,21 @@
         if(ledger){ledger.month=e.detail?.month||ledger.month;ledger.tab='by_account';ledger.focusAccountId=e.detail?.account_id||'';this.ledgerSubview='by_account';ledger.message='Buchungen zur Kontokorrektur prüfen. Eine Korrektur erfolgt ausschließlich über eine nachvollziehbare Buchung; bestätigte Konten sind gesperrt.';}
         this.selectTab('ledger');
       });
+      this.shadowRoot.addEventListener('ft-open-actual-booking',async e=>{
+        const {month,transaction_id,action}=e.detail||{};
+        const ledger=this.shadowRoot.querySelector('#ledger > *');
+        if(!ledger||!transaction_id)return;
+        ledger.month=month||ledger.month;
+        ledger.tab='by_account';ledger.focusAccountId='';
+        this.ledgerSubview='by_account';
+        this.selectTab('ledger',{deferRefresh:true});
+        this.renderSubnav();
+        try{
+          await ledger.refresh();
+          await ledger.openTransactionFromSearch(transaction_id,action==='void'?'void':'edit');
+          this.ledgerSubview='by_account';this.renderSubnav();
+        }catch(error){ledger.message='Buchung konnte nicht geöffnet werden: '+(error.message||String(error));ledger.render();}
+      });
       this.shadowRoot.addEventListener('ft-booking-search',()=>{if(this.active==='ledger')this._openBookingSearch();});
       this.shadowRoot.addEventListener('ft-dialog-request',e=>{
         const owner=e.detail?.owner;
@@ -235,10 +285,10 @@
       const content=this.shadowRoot.getElementById('content');
       if(!content || content.dataset.mounted==='yes') return;
       content.dataset.mounted='yes';
-      const templates=document.createElement('finance-tracker-templates-panel-s24');
-      const planning=document.createElement('finance-tracker-planning-panel-s22');
-      const ledger=document.createElement('finance-tracker-panel-2-3-1-s22');
-      const closing=document.createElement('finance-tracker-closing-panel-v21');
+      const templates=document.createElement('finance-tracker-templates-panel-v413');
+      const planning=document.createElement('finance-tracker-planning-panel-v413');
+      const ledger=document.createElement('finance-tracker-panel-v413');
+      const closing=document.createElement('finance-tracker-closing-panel-v413');
       content.querySelector('#templates').appendChild(templates);
       content.querySelector('#planning').appendChild(planning);
       content.querySelector('#ledger').appendChild(ledger);
@@ -255,15 +305,17 @@
       this.selectTab(this.active);
       this.passHass();
     }
-    selectTab(tab) {
+    selectTab(tab,{deferRefresh=false}={}) {
       if(!['templates','planning','ledger','master','closing'].includes(tab)) return;
       const targetTab=tab==='master'?'ledger':tab;
       const old=this.active;
       const oldPanel=this.shadowRoot.querySelector('#'+(old==='master'?'ledger':old)+' > *');
       const targetPanel=this.shadowRoot.querySelector('#'+targetTab+' > *');
+      if(!targetPanel){console.warn('Finance Tracker: Unteransicht noch nicht initialisiert:',tab);return;}
       if(old!==tab){
         // Close transient editors before a view switch; no pending form is saved.
         oldPanel?.abortTransient?.();
+        if(oldPanel===targetPanel)targetPanel?.abortTransient?.();
         if(['planning','ledger','closing','master'].includes(old)&&['planning','ledger','closing','master'].includes(tab)&&oldPanel?.month&&targetPanel?.month!==oldPanel.month){
           targetPanel.month=oldPanel.month;
         }
@@ -271,7 +323,7 @@
       this.active=tab;
       this._syncDialogLayer();
       const switchToken=this._switchToken=(this._switchToken||0)+1;
-      this._reconcileMonth(tab,targetPanel,switchToken);
+      this._reconcileMonth(tab,targetPanel,switchToken,deferRefresh);
       for(const key of ['templates','planning','ledger','closing']) {
         const section=this.shadowRoot.getElementById(key);
         const button=this.shadowRoot.querySelector(`[data-tab="${key}"]`);
@@ -290,12 +342,12 @@
       // its month was already selected. Preserve the shared month and avoid
       // remounting the child element (which would reset the user's navigation).
       // Refresh is performed by _reconcileMonth after allowed periods are resolved.
-      if(old===tab&&this.ready&&targetPanel?._hass){
+      if(!deferRefresh&&old===tab&&this.ready&&targetPanel?._hass){
         if(tab==='ledger')targetPanel.collapseLedgerGroups?.(false);
         targetPanel.refresh?.();
       }
     }
-    async _reconcileMonth(tab,panel,token){
+    async _reconcileMonth(tab,panel,token,deferRefresh=false){
       if(!this._hass||!panel)return;
       try{
         const data=await this._hass.callWS({type:'finance_tracker/planning_v3'});
@@ -313,7 +365,7 @@
           if(tpl&&tpl.month!==panel.month)tpl.month=panel.month;
         }
       }catch(e){console.warn('Finance Tracker: Planstatus nicht verfügbar',e);}
-      if(token===this._switchToken&&panel?._hass)await panel.refresh?.();
+      if(!deferRefresh&&token===this._switchToken&&panel?._hass)await panel.refresh?.();
     }
     _nextMonth(m){const [y,n]=m.split('-').map(Number);return n===12?`${y+1}-01`:`${y}-${String(n+1).padStart(2,'0')}`;}
     _choices(){
@@ -337,12 +389,12 @@
       const root=child?.shadowRoot;
       const main=root?.querySelector('main.wrap');
       if(!main)return;
-      if(key==='closing'){if(!root.getElementById('ft-closing-sticky')){const style=document.createElement('style');style.id='ft-closing-sticky';style.textContent='.header{position:sticky!important;top:var(--ft-sticky-top,0px)!important;z-index:1000!important;background:var(--primary-background-color,#111827)}';root.append(style);}return;}
+      if(key==='closing'){if(!root.getElementById('ft-closing-sticky')){const style=document.createElement('style');style.id='ft-closing-sticky';style.textContent='.header{position:sticky!important;top:var(--ft-sticky-top,0px)!important;transition:top .42s cubic-bezier(.4,0,.2,1)!important;z-index:1000!important;background:var(--primary-background-color,#111827)}';root.append(style);}return;}
       // The child's render() replaces its shadow DOM. Restore the navigation
       // immediately after the month/header row without modifying child logic.
       if(!root.getElementById('ft-inline-nav-style')){
         const style=document.createElement('style');style.id='ft-inline-nav-style';
-        style.textContent=`.sticky-header-group,.finance-head,.ft-page-head,.head{position:sticky!important;top:var(--ft-sticky-top,0px)!important;z-index:1000!important;transform:none!important;background:var(--primary-background-color,#111827)}
+        style.textContent=`.sticky-header-group,.finance-head,.ft-page-head,.head{position:sticky!important;top:var(--ft-sticky-top,0px)!important;transition:top .42s cubic-bezier(.4,0,.2,1)!important;z-index:1000!important;transform:none!important;background:var(--primary-background-color,#111827)}
           .ft-inline-subnav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:12px 0 16px;width:100%;min-width:0}
           .ft-inline-subnav button{min-width:0;min-height:39px;padding:8px 7px;border-radius:10px;border:1px solid var(--divider-color,#394657);background:var(--card-background-color,#1e293b);color:var(--primary-text-color,#e8edf3);font:inherit;font-size:12px;line-height:1.3;overflow-wrap:anywhere;cursor:pointer}
           .ft-inline-subnav button.active{background:var(--primary-color,#4c9aff);color:white;border-color:transparent}
@@ -369,6 +421,11 @@
     }
     _chooseSubnav(id){
       if(!this._choices().some(([key])=>key===id))return;
+      const current=this.active==='planning'?this.planningSubview:this.active==='master'?this.masterSubview:this.ledgerSubview;
+      if(current!==id){
+        // A sub-view change must dismiss all unsaved editors and temporary pickers.
+        for(const panel of this.shadowRoot.querySelectorAll('#templates > *, #planning > *, #ledger > *, #closing > *'))panel.abortTransient?.();
+      }
       if(this.active==='planning'){
         this.planningSubview=id;
         for(const key of ['planning','templates'])this.shadowRoot.getElementById(key).hidden=(id==='templates'?key!=='templates':key!=='planning');
@@ -379,7 +436,9 @@
         const ledger=this.shadowRoot.querySelector('#ledger > *');
         if(this.active==='master')this.masterSubview=id;else this.ledgerSubview=id;
         if(id==='by_account')ledger.focusAccountId='';
-        ledger.tab=id;ledger.context=this.active==='master'?'master':'ledger';ledger.render?.();
+        ledger.tab=id;ledger.context=this.active==='master'?'master':'ledger';
+        // Re-entering a subview reloads data and closes all groups.
+        if(ledger._hass)ledger.refresh?.();else ledger.render?.();
       }
       this.renderSubnav();
     }

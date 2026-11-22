@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from homeassistant.exceptions import HomeAssistantError
 from .ledger import validate_month
+from .closing_balance import balance as reference_balance
 
 
 def _exists(db, table):
@@ -105,12 +106,13 @@ def validate_month_report(hass, month):
         previous_day=(first-timedelta(days=1)).isoformat()
         previous_month=previous_day[:7]
         previous_closings={r['account_id']:dict(r) for r in db.execute('SELECT * FROM ft_closings WHERE month=?',(previous_month,))}
+        drafts={r["account_id"]:r["actual_cents"] for r in db.execute("SELECT * FROM ft_closing_drafts WHERE month=?",(month,))} if _exists(db,"ft_closing_drafts") else {}
         account_results=[]
         for a in accounts:
-            if a['opening_date']>end_day:
+            if a['opening_date']>end_day or (not a['active'] and a['id'] not in closings):
                 continue
             aid=a['id']
-            balance=a['opening_cents']+db.execute('SELECT COALESCE(SUM(amount_cents),0) FROM ft_transactions WHERE account_id=? AND booked<=? AND voided=0',(aid,end_day)).fetchone()[0]
+            balance=reference_balance(db,a,month+'-31',False)
             tol=0
             if tolerance_available:
                 r=db.execute('SELECT tolerance_cents FROM ft_account_meta WHERE account_id=?',(aid,)).fetchone()
@@ -118,19 +120,13 @@ def validate_month_report(hass, month):
             closing=closings.get(aid)
             status='not_checkable'
             diff=None
-            if closing:
-                # Historic closing is assessed against its frozen tolerance, not a new setting.
-                effective=int(closing['tolerance_cents']) if closing_tolerance else 0
-                diff=int(closing['actual_cents'])-balance
-                if abs(diff)>effective:
-                    status='error'
-                    emit('KO-01','error','Kontostand weicht vom bestätigten Abschluss ab',account_id=aid,difference_cents=diff,tolerance_cents=effective)
-                else:
-                    status='warning' if diff else 'passed'
-                    if diff: emit('KO-01','warning','Kontodifferenz liegt innerhalb der dokumentierten Toleranz',account_id=aid,difference_cents=diff,tolerance_cents=effective)
+            actual=drafts.get(aid,closing['actual_cents'] if closing else None)
+            if actual is not None:
+                diff=actual-balance
+                status='warning' if diff else 'passed'
             else:
-                emit('KO-02','not_checkable','Bestätigter Kontostand fehlt',account_id=aid,calculated_cents=balance,tolerance_cents=tol)
-            previous_balance=(a['opening_cents']+db.execute('SELECT COALESCE(SUM(amount_cents),0) FROM ft_transactions WHERE account_id=? AND booked<=? AND voided=0',(aid,previous_day)).fetchone()[0]) if a['opening_date']<=previous_day else None
+                emit('KO-02','not_checkable','Tatsächlicher Kontostand fehlt',account_id=aid)
+            previous_balance=reference_balance(db,a,previous_month+'-31') if a['opening_date']<=previous_day else None
             movement=db.execute('SELECT COALESCE(SUM(amount_cents),0) FROM ft_transactions WHERE account_id=? AND booked>=? AND booked<? AND voided=0',(aid,first.isoformat(),end.isoformat())).fetchone()[0]
             meta=meta_rows.get(aid,{})
             owner=meta.get('owner') or 'Nicht zugeordnet'
@@ -139,14 +135,56 @@ def validate_month_report(hass, month):
               'previous_month':previous_month,'previous_calculated_cents':previous_balance,
               'previous_confirmed_cents':prev['actual_cents'] if prev else None,
               'movement_cents':movement,'calculated_cents':balance,
-              'confirmed_cents':closing['actual_cents'] if closing else None,'difference_cents':diff,
+              'confirmed_cents':actual,'difference_cents':diff,
               'tolerance_cents':int(closing['tolerance_cents']) if closing and closing_tolerance else (0 if closing else tol),
               'status':status,'closed_at':closing['closed'] if closing else None})
-        # A closed period must not silently drift after confirmation.
-        for a in account_results:
-            c=closings.get(a['account_id'])
-            if c and a['calculated_cents']!=c['calculated_cents']:
-                emit('PE-02','error','Buchungsbestand hat sich seit Kontenabschluss verändert',account_id=a['account_id'])
+        # Resolve user-facing references within the same read-only snapshot.
+        names={r['id']:r['name'] for r in db.execute('SELECT id,name FROM ft_categories')} if _exists(db,'ft_categories') else {}
+        account_lookup={a['id']:a for a in accounts}
+        def account_detail(aid):
+            a=account_lookup.get(aid)
+            if not a: return None
+            meta=meta_rows.get(aid,{})
+            return {'name':meta.get('display_name') or a['name'], 'owner':meta.get('owner') or 'Nicht zugeordnet', 'bank':meta.get('bank') or ''}
+        tx_cache={t['id']:t for t in transactions}
+        def tx_detail(tid):
+            if tid not in tx_cache:
+                row=db.execute('SELECT * FROM ft_transactions WHERE id=?',(tid,)).fetchone()
+                tx_cache[tid]=dict(row) if row else None
+            t=tx_cache[tid]
+            if not t: return None
+            cid=t['category_id']
+            return {'description':t['description'], 'booked':t['booked'], 'kind':t['kind'], 'amount_cents':t['amount_cents'], 'voided':bool(t['voided']), 'account':account_detail(t['account_id']), 'category':names.get(cid) if cid else None, 'category_missing':not bool(cid), 'category_unknown':bool(cid and cid not in names)}
+        transfer_cache={}
+        link_lookup={l['id']:l for l in links} if _exists(db,'ft4_plan_actual_links') else {}
+        for f in findings:
+            if f.get('account_id'): f['account_detail']=account_detail(f['account_id'])
+            if f.get('transaction_id'): f['transaction_detail']=tx_detail(f['transaction_id'])
+            if f.get('transfer_id'):
+                tid=f['transfer_id']
+                if tid not in transfer_cache:
+                    transfer_cache[tid]=[tx_detail(r['id']) for r in db.execute('SELECT id FROM ft_transactions WHERE transfer_id=? ORDER BY amount_cents,booked,id',(tid,))]
+                f['transfer_details']=transfer_cache[tid]
+            link=link_lookup.get(f.get('link_id'))
+            if link:
+                f['allocation_detail']={'month':link['month'],'amount_cents':link['amount_cents']}
+        if _exists(db,'ft5_debit_positions'):
+            for d in db.execute('SELECT * FROM ft5_debit_positions WHERE month=? AND enabled=1',(month,)):
+                pid=d['position_id']
+                if pid.startswith('tpl:'):
+                    name_row=db.execute('SELECT name FROM ft3_templates WHERE id=?',(pid[4:],)).fetchone()
+                else:
+                    name_row=db.execute('SELECT name FROM ft3_positions WHERE id=?',(pid,)).fetchone()
+                name=name_row[0] if name_row else 'Unbekannte Planposition'
+                if d['automatic'] and _exists(db,'ft5_debit_failures'):
+                    failure=db.execute('SELECT reason FROM ft5_debit_failures WHERE month=? AND position_id=?',(month,pid)).fetchone()
+                    if failure:emit('LS-02','warning','Automatische Lastschrift nicht verbucht: '+name,position_name=name,reason=failure[0])
+                if not d['day']:continue
+                due=date(first.year,first.month,min(d['day'],(end-timedelta(days=1)).day))
+                if date.today()<=due:continue
+                linked=db.execute('SELECT 1 FROM ft4_plan_actual_links l JOIN ft_transactions t ON t.id=l.transaction_id WHERE l.month=? AND l.position_id=? AND t.voided=0',(month,pid)).fetchone() if _exists(db,'ft4_plan_actual_links') else None
+                run=db.execute('SELECT 1 FROM ft5_debit_runs WHERE month=? AND position_id=?',(month,pid)).fetchone() if _exists(db,'ft5_debit_runs') else None
+                if not linked and not run:emit('LS-01','warning','Lastschrift überfällig: '+name,position_name=name,expected_day=d['day'],account_detail=account_detail(d['account_id']))
         counts={s:sum(f['severity']==s for f in findings) for s in ('error','warning','not_checkable')}
         ready=counts['error']==0 and counts['not_checkable']==0
-        return {'month':month,'ready':ready,'status':'ready' if ready else 'blocked','counts':counts,'checked_transactions':len(transactions),'transaction_accounts':{t['id']:t['account_id'] for t in transactions},'accounts':account_results,'findings':findings,'read_only':True,'note':'Offene Plan-Ist-Zuordnungen sind nicht blockierend. Konten ohne bestätigten Iststand bleiben nicht prüfbar.'}
+        return {'month':month,'closed':bool(account_results) and all(a['closed_at'] for a in account_results),'booked_cents':sum(t['amount_cents'] for t in transactions),'ready':ready,'status':'ready' if ready else 'blocked','counts':counts,'checked_transactions':len(transactions),'transaction_accounts':{t['id']:t['account_id'] for t in transactions},'accounts':account_results,'findings':findings,'read_only':True,'note':'Offene Plan-Ist-Zuordnungen sind nicht blockierend. Konten ohne bestätigten Iststand bleiben nicht prüfbar.'}

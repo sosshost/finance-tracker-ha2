@@ -22,6 +22,8 @@ from .category_catalog import initialize as initialize_categories
 from .category_catalog import summary as category_summary
 from .const import DOMAIN, LEDGER_KEY, RUNTIME_READY_KEY
 from .frontend import async_register_frontend, async_unregister_frontend
+from .direct_debit import action as debit_action, run as run_debits
+from homeassistant.helpers.event import async_track_time_change
 from .ledger import Ledger
 from .month_validation import validate_month_report
 from .plan_actual import action as plan_actual_action
@@ -65,6 +67,22 @@ async def _run_worker(
         _report_failure(connection, msg, label, public_message)
     else:
         connection.send_result(msg["id"], result)
+
+
+def _register_direct_debit(hass: HomeAssistant) -> None:
+    @websocket_api.websocket_command({
+        vol.Required("type"): "finance_tracker/direct_debit",
+        vol.Required("op"): vol.In(["info", "global", "run"]),
+        vol.Optional("data", default={}): dict,
+    })
+    @websocket_api.async_response
+    async def command(hass, connection, msg):
+        if msg["op"] != "info" and not connection.user.is_admin:
+            connection.send_error(msg["id"], "unauthorized", "Nur Administratoren dürfen die Automatik steuern")
+            return
+        await _run_worker(hass, connection, msg, "direct_debit", "Lastschriftaktion fehlgeschlagen",
+                          debit_action, hass, msg["op"], msg["data"])
+    websocket_api.async_register_command(hass, command)
 
 
 def _register_category_summary(hass: HomeAssistant) -> None:
@@ -200,6 +218,9 @@ def _register_plan_editor(hass: HomeAssistant) -> None:
     )
     @websocket_api.async_response
     async def plan_editor_command(hass, connection, msg):
+        if msg["op"] == "save" and "debit_enabled" in msg["data"] and not connection.user.is_admin:
+            connection.send_error(msg["id"], "unauthorized", "Lastschriftmerkmale dürfen nur Administratoren ändern")
+            return
         await _run_worker(
             hass,
             connection,
@@ -227,6 +248,9 @@ def _register_templates(hass: HomeAssistant) -> None:
     )
     @websocket_api.async_response
     async def template_command(hass, connection, msg):
+        if msg["op"] == "save" and "debit_enabled" in msg["data"] and not connection.user.is_admin:
+            connection.send_error(msg["id"], "unauthorized", "Lastschriftmerkmale dürfen nur Administratoren ändern")
+            return
         await _run_worker(
             hass,
             connection,
@@ -300,6 +324,9 @@ def _register_ledger(hass: HomeAssistant) -> None:
         "add_transaction",
         "transfer",
         "close_month",
+        "save_closing_draft",
+        "confirm_closing",
+        "closing_history",
         "edit_transaction",
         "edit_transfer",
         "void_transaction",
@@ -332,7 +359,7 @@ def _register_ledger(hass: HomeAssistant) -> None:
             "Interner Fehler; siehe HA-Protokoll",
             ledger.execute,
             msg["op"],
-            msg["data"],
+            {**msg["data"], "_actor": connection.user.id},
         )
 
     websocket_api.async_register_command(hass, ledger_command)
@@ -341,6 +368,7 @@ def _register_ledger(hass: HomeAssistant) -> None:
 def _register_runtime_interfaces(hass: HomeAssistant) -> None:
     """Install every websocket endpoint exactly once for this HA process."""
     _register_category_summary(hass)
+    _register_direct_debit(hass)
     _register_category_admin(hass)
     _register_account_meta(hass)
     _register_proposals(hass)
@@ -363,6 +391,15 @@ async def _ensure_runtime(hass: HomeAssistant) -> None:
         await hass.async_add_executor_job(initialize_categories, hass)
         _register_runtime_interfaces(hass)
         runtime[RUNTIME_READY_KEY] = True
+
+    if not runtime.get("debit_scheduler"):
+        async def check_debits(_now):
+            try:
+                await hass.async_add_executor_job(run_debits, hass)
+            except Exception:
+                _LOGGER.exception("Finance Tracker automatische Lastschriftprüfung fehlgeschlagen")
+        runtime["debit_scheduler"] = async_track_time_change(hass, check_debits, hour=7, minute=5, second=0)
+        hass.async_create_task(check_debits(None))
 
     await async_register_frontend(hass)
 
