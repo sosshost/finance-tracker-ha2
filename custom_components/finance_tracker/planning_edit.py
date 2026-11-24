@@ -4,7 +4,7 @@ from datetime import date
 from pathlib import Path
 from homeassistant.exceptions import HomeAssistantError
 from .ledger import validate_month, now
-from .direct_debit import SCHEMA as DEBIT_SCHEMA, save as save_debit
+from .direct_debit import SCHEMA as DEBIT_SCHEMA, save as save_debit, config as debit_config
 from .plan_templates import SCHEMA as TEMPLATE_SCHEMA, verify as verify_template
 
 SCHEMA="""
@@ -17,7 +17,12 @@ def _open(hass):
  db=sqlite3.connect(hass.config.path('finance/household_v2.db'),timeout=5)
  db.row_factory=sqlite3.Row
  db.execute('PRAGMA busy_timeout=5000')
- db.executescript(SCHEMA+TEMPLATE_SCHEMA+DEBIT_SCHEMA)
+ # executescript commits implicitly and acquires write locks, even for info.
+ # Run the legacy schema bootstrap only when one of its tables is missing.
+ required=('ft3_plan_months','ft3_plan_values','ft3_plan_accounts',
+           'ft4_manual_plan_targets','ft3_templates','ft5_debit_positions')
+ if any(not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone() for table in required):
+  db.executescript(SCHEMA+TEMPLATE_SCHEMA+DEBIT_SCHEMA)
  return db
 
 def action(hass,op,data):
@@ -25,49 +30,17 @@ def action(hass,op,data):
  with _open(hass) as db:
   existing=db.execute('SELECT status FROM ft3_plan_months WHERE month=?',(month,)).fetchone()
   if op=='info':
-   return {'month':month,'status':existing['status'] if existing else 'imported','editable':bool(existing),'positions':[dict(r) for r in db.execute('SELECT id,name,kind,source_row FROM ft3_positions ORDER BY source_row')], 'debit_positions':{r['position_id']:dict(r) for r in db.execute('SELECT * FROM ft5_debit_positions WHERE month=?',(month,))}, 'debit_templates':{r['template_id']:dict(r) for r in db.execute('SELECT * FROM ft5_debit_templates')}, 'template_transfer_targets':{r['template_id']:r['to_account_id'] for r in db.execute('SELECT template_id,to_account_id FROM ft4_plan_transfer_targets WHERE month=?',(month,))}, 'manual_transfer_targets':{r['position_id']:r['to_account_id'] for r in db.execute('SELECT position_id,to_account_id FROM ft4_manual_plan_targets WHERE month=?',(month,))}, 'account_assignments':{r['position_id']:r['account_id'] for r in db.execute('SELECT position_id,account_id FROM ft3_plan_accounts WHERE month=?',(month,))}, 'accounts':[dict(r) for r in db.execute('SELECT id,name,kind FROM ft_accounts WHERE active=1 ORDER BY name')], 'excluded':[r['position_id'] for r in db.execute('SELECT position_id FROM ft3_plan_exclusions WHERE month=?',(month,))], 'categories':{r['position_id']:r['category_id'] for r in db.execute('SELECT position_id,category_id FROM ft3_plan_categories WHERE month=?',(month,))}, 'mapped_categories':{r['id']:r['category_id'] for r in db.execute('SELECT p.id,m.category_id FROM ft3_positions p JOIN ft3_category_mapping m ON p.name=m.source_name AND p.kind=m.source_kind')}, 'template_items':[dict(r) for r in db.execute('SELECT i.*,t.name,t.kind FROM ft3_template_plan_items i JOIN ft3_templates t ON t.id=i.template_id WHERE i.month=?',(month,))]}
+   return {'month':month,'status':existing['status'] if existing else 'imported','editable':bool(existing),'positions':[dict(r) for r in db.execute('SELECT id,name,kind,source_row FROM ft3_positions ORDER BY source_row')], 'debit_positions':{r['position_id']:dict(r) for r in db.execute('SELECT * FROM ft5_debit_positions WHERE month=?',(month,))}, 'debit_templates':{r['template_id']:dict(r) for r in db.execute('SELECT * FROM ft5_debit_templates')}, 'template_transfer_targets':{r['template_id']:r['to_account_id'] for r in db.execute('SELECT template_id,to_account_id FROM ft4_plan_transfer_targets WHERE month=?',(month,))}, 'manual_transfer_targets':{r['position_id']:r['to_account_id'] for r in db.execute('SELECT position_id,to_account_id FROM ft4_manual_plan_targets WHERE month=?',(month,))}, 'account_assignments':{**{r['position_id']:r['account_id'] for r in db.execute('SELECT position_id,account_id FROM ft3_plan_accounts WHERE month=?',(month,))}, **{'tpl:'+r['template_id']:r['account_id'] for r in db.execute('SELECT template_id,account_id FROM ft3_template_plan_items WHERE month=? AND account_id IS NOT NULL',(month,))}}, 'accounts':[dict(r) for r in db.execute('SELECT id,name,kind FROM ft_accounts WHERE active=1 ORDER BY name')], 'excluded':[r['position_id'] for r in db.execute('SELECT position_id FROM ft3_plan_exclusions WHERE month=?',(month,))], 'categories':{**{r['position_id']:r['category_id'] for r in db.execute('SELECT position_id,category_id FROM ft3_plan_categories WHERE month=?',(month,))}, **{'tpl:'+r['template_id']:r['category_id'] for r in db.execute('SELECT template_id,category_id FROM ft3_template_plan_items WHERE month=? AND category_id IS NOT NULL',(month,))}}, 'mapped_categories':{r['id']:r['category_id'] for r in db.execute('SELECT p.id,m.category_id FROM ft3_positions p JOIN ft3_category_mapping m ON p.name=m.source_name AND p.kind=m.source_kind')}, 'template_items':[dict(r) for r in db.execute('SELECT i.*,t.name,t.kind FROM ft3_template_plan_items i JOIN ft3_templates t ON t.id=i.template_id WHERE i.month=?',(month,))]}
   if op=='create':
    if existing: raise HomeAssistantError('Monatsentwurf existiert bereits')
-   mode=str(data.get('mode') or 'individual')
-   if mode not in ('previous','template','individual'):raise HomeAssistantError('Ungültige Planquelle')
-   source=validate_month(data.get('source_month'))
-   if source>=month: raise HomeAssistantError('Quellmonat muss vor dem Zielmonat liegen')
-   # An imported target month is never overwritten: only its own edits become overlays.
-   source_exists=db.execute('SELECT 1 FROM ft3_periods WHERE period=? UNION SELECT 1 FROM ft3_plan_months WHERE month=?',(source,source)).fetchone()
-   if not source_exists and mode=='previous': raise HomeAssistantError('Quellmonat nicht vorhanden')
+   if data.get('mode','template')!='template' or data.get('included_positions'):
+    raise HomeAssistantError('Neue Monatsentwürfe ausschließlich aus Monatsvorlagen erstellen')
+   tids=data.get('template_ids',[])
+   if not isinstance(tids,list) or any(not isinstance(t,str) for t in tids):raise HomeAssistantError('Ungültige Vorlagenauswahl')
    target_imported=bool(db.execute('SELECT 1 FROM ft3_periods WHERE period=?',(month,)).fetchone())
+   db.execute('BEGIN IMMEDIATE')
    db.execute('INSERT INTO ft3_plan_months VALUES(?,?,?,?)',(month,'draft',now(),now()))
-   if not target_imported and mode!='template':
-    # Copy all raw source amounts except derived/balance/clearing/status; one-off positions are not inferred.
-    db.execute("""INSERT INTO ft3_plan_values(month,position_id,amount_cents,updated)
-       SELECT ?,p.id,COALESCE(o.amount_cents,v.amount_cents),?
-       FROM ft3_positions p LEFT JOIN ft3_monthly_values v ON v.position_id=p.id AND v.period=?
-       LEFT JOIN ft3_plan_values o ON o.position_id=p.id AND o.month=?
-       WHERE p.kind IN ('income','expense','saving_transfer','household_aggregate') AND (o.amount_cents IS NOT NULL OR v.amount_cents IS NOT NULL)""",(month,now(),source,source))
-   if mode!='template':
-    db.execute('INSERT INTO ft3_plan_accounts(month,position_id,account_id,updated) SELECT ?,position_id,account_id,? FROM ft3_plan_accounts WHERE month=?',(month,now(),source))
-    db.execute('INSERT OR IGNORE INTO ft5_debit_positions SELECT ?,position_id,enabled,day,automatic,account_id,to_account_id FROM ft5_debit_positions WHERE month=?',(month,source))
-    db.execute('INSERT OR IGNORE INTO ft3_plan_categories(month,position_id,category_id) SELECT ?,position_id,category_id FROM ft3_plan_categories WHERE month=?',(month,source))
-    # Include independently added template positions from the preceding draft.
-    for r in db.execute('SELECT * FROM ft3_template_plan_items WHERE month=?',(source,)).fetchall():
-     if mode=='previous' or ('tpl:'+r['template_id']) in data.get('included_positions',[]):
-      db.execute('INSERT OR IGNORE INTO ft3_template_plan_items VALUES(?,?,?,?,?,?)',(month,r['template_id'],r['amount_cents'],r['category_id'],r['account_id'],r['customized']))
-      db.execute('INSERT OR IGNORE INTO ft5_debit_positions SELECT ?,?,enabled,day,automatic,account_id,to_account_id FROM ft5_debit_positions WHERE month=? AND position_id=?',(month,'tpl:'+r['template_id'],source,'tpl:'+r['template_id']))
-   # Preserve removals made in the preceding draft when copying its contents.
-   if mode!='template':
-    db.execute('INSERT OR IGNORE INTO ft3_plan_exclusions(month,position_id) SELECT ?,position_id FROM ft3_plan_exclusions WHERE month=?',(month,source))
-   # Explicit selection: excluded source positions do not become part of this draft.
-   included=[] if mode=='template' else (None if mode=='previous' else data.get('included_positions'))
-   if included is not None:
-    if not isinstance(included,list):raise HomeAssistantError('Ungültige Positionsauswahl')
-    eligible={r['id'] for r in db.execute("SELECT id FROM ft3_positions WHERE kind IN ('income','expense','saving_transfer','household_aggregate')")}
-    if not set(included)<=eligible:raise HomeAssistantError('Unbekannte Planposition')
-    for pid in set(included):db.execute('DELETE FROM ft3_plan_exclusions WHERE month=? AND position_id=?',(month,pid))
-    for pid in eligible-set(included):
-     db.execute('INSERT OR IGNORE INTO ft3_plan_exclusions VALUES(?,?)',(month,pid))
-   # Only explicitly selected templates are included. No automatic recurring booking.
-   tids=[] if mode=='previous' else data.get('template_ids',[])
-   if not isinstance(tids,list):raise HomeAssistantError('Ungültige Vorlagenauswahl')
+   db.execute("INSERT OR IGNORE INTO ft3_plan_exclusions SELECT ?,id FROM ft3_positions WHERE kind IN ('income','expense','saving_transfer','household_aggregate')",(month,))
    for tid in set(tids):
     t=db.execute('SELECT * FROM ft3_templates WHERE id=? AND active=1 AND deleted=0',(tid,)).fetchone()
     if not t or month[5:] not in __import__('json').loads(t['months']):raise HomeAssistantError('Vorlage für diesen Kalendermonat nicht gültig')
@@ -78,16 +51,14 @@ def action(hass,op,data):
     db.execute('INSERT OR IGNORE INTO ft3_template_plan_items VALUES(?,?,?,?,?,0)',
                (month,tid,t['amount_cents'],t['category_id'],t['account_id']))
     db.execute('INSERT OR IGNORE INTO ft5_debit_positions SELECT ?,?,enabled,day,automatic,account_id,to_account_id FROM ft5_debit_templates WHERE template_id=?',(month,'tpl:'+tid,tid))
-    # If the user selected both the old source row and its template in an
-    # individual draft, show the template only; never count the source twice.
-    if t['position_id']:
-     db.execute('INSERT OR IGNORE INTO ft3_plan_exclusions VALUES(?,?)',(month,t['position_id']))
    # Carry over the target account for transfer templates selected into this month.
    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft4_plan_transfer_targets'").fetchone():
     db.execute("""INSERT OR IGNORE INTO ft4_plan_transfer_targets(month,template_id,to_account_id)
        SELECT ?, i.template_id, t.to_account_id FROM ft3_template_plan_items i
        JOIN ft4_transfer_template_targets t ON t.template_id=i.template_id
        WHERE i.month=?""",(month,month))
+   db.execute("DELETE FROM ft5_debit_positions WHERE month=? AND position_id LIKE 'tpl:%' AND NOT EXISTS (SELECT 1 FROM ft3_template_plan_items i WHERE i.month=? AND 'tpl:'||i.template_id=ft5_debit_positions.position_id)",(month,month))
+   db.execute("INSERT OR IGNORE INTO ft5_debit_positions SELECT ?, 'tpl:'||i.template_id,COALESCE(d.enabled,0),d.day,COALESCE(d.automatic,0),d.account_id,d.to_account_id FROM ft3_template_plan_items i LEFT JOIN ft5_debit_templates d ON d.template_id=i.template_id WHERE i.month=?",(month,month))
    return {'created':True,'month':month,'imported_source_preserved':target_imported}
   if not existing: raise HomeAssistantError('Zuerst Monatsentwurf erstellen')
   if op=='add_position':
@@ -155,15 +126,14 @@ def action(hass,op,data):
     if not source or not target or source==target:raise HomeAssistantError('Zwei unterschiedliche Konten erforderlich')
     if not db.execute('SELECT 1 FROM ft_accounts WHERE id=? AND active=1',(target,)).fetchone():raise HomeAssistantError('Zielkonto ungültig')
     db.execute('INSERT INTO ft4_plan_transfer_targets(month,template_id,to_account_id) VALUES(?,?,?) ON CONFLICT(month,template_id) DO UPDATE SET to_account_id=excluded.to_account_id',(month,ident[4:],target))
-   if 'debit_enabled' in data:
-    save_debit(db,month,ident,pos['kind'],data)
    if 'category_id' in data:
     cid=data.get('category_id') or None
     verify_template(db,pos['kind'],cid,None)
     if ident.startswith('tpl:'):
      db.execute('UPDATE ft3_template_plan_items SET category_id=?,customized=1 WHERE month=? AND template_id=?',(cid,month,ident[4:]))
     else:
-     db.execute('INSERT INTO ft3_plan_categories VALUES(?,?,?) ON CONFLICT(month,position_id) DO UPDATE SET category_id=excluded.category_id',(month,ident,cid))
+     if cid:db.execute('INSERT INTO ft3_plan_categories VALUES(?,?,?) ON CONFLICT(month,position_id) DO UPDATE SET category_id=excluded.category_id',(month,ident,cid))
+     else:db.execute('DELETE FROM ft3_plan_categories WHERE month=? AND position_id=?',(month,ident))
    if 'to_account_id' in data and pos['kind']=='saving_transfer' and not ident.startswith('tpl:'):
     target=str(data.get('to_account_id') or '')
     source=str(data.get('account_id') or (db.execute('SELECT account_id FROM ft3_plan_accounts WHERE month=? AND position_id=?',(month,ident)).fetchone() or [''])[0])
@@ -179,6 +149,21 @@ def action(hass,op,data):
     else:
      if ident.startswith('tpl:'):db.execute('UPDATE ft3_template_plan_items SET account_id=NULL,customized=1 WHERE month=? AND template_id=?',(month,ident[4:]))
      else:db.execute('DELETE FROM ft3_plan_accounts WHERE month=? AND position_id=?',(month,ident))
+   if ident.startswith('tpl:'):
+    account=db.execute('SELECT account_id FROM ft3_template_plan_items WHERE month=? AND template_id=?',(month,ident[4:])).fetchone()
+    target=db.execute('SELECT to_account_id FROM ft4_plan_transfer_targets WHERE month=? AND template_id=?',(month,ident[4:])).fetchone()
+   else:
+    account=db.execute('SELECT account_id FROM ft3_plan_accounts WHERE month=? AND position_id=?',(month,ident)).fetchone()
+    target=db.execute('SELECT to_account_id FROM ft4_manual_plan_targets WHERE month=? AND position_id=?',(month,ident)).fetchone()
+   aid=account[0] if account else None; to=target[0] if target and pos['kind']=='saving_transfer' else None
+   cfg=debit_config(db,month,ident)
+   if 'debit_enabled' in data:
+    save_debit(db,month,ident,pos['kind'],{**data,'account_id':aid,'to_account_id':to})
+   elif cfg['enabled']:
+    if aid!=cfg['account_id'] or to!=cfg['to_account_id']:
+     raise HomeAssistantError('Kontozuordnung und Lastschrift stimmen nicht überein. Lastschrift ausdrücklich prüfen und speichern.')
+    # Freeze the inherited configuration for this month without changing its permissions.
+    db.execute('INSERT OR IGNORE INTO ft5_debit_positions VALUES(?,?,?,?,?,?,?)',(month,ident,cfg['enabled'],cfg['day'],cfg['automatic'],aid,to))
    db.execute('UPDATE ft3_plan_months SET updated=? WHERE month=?',(now(),month))
    return {'saved':True}
   if op=='exclude':

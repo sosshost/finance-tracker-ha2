@@ -1,6 +1,6 @@
 /* Finance Tracker 3.0 · Stufe 24: eigenständige Monatsvorlage */
 (()=>{
-const tag='finance-tracker-templates-panel-v413';if(customElements.get(tag))return;
+const tag='finance-tracker-templates-panel-v414';if(customElements.get(tag))return;
 class Templates extends HTMLElement{
  constructor(){super();this.attachShadow({mode:'open'});this.shadowRoot.addEventListener('click',event=>{
   const button=event.composedPath().find(x=>x instanceof HTMLElement&&x.matches?.('button'));

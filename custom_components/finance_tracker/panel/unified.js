@@ -35,7 +35,7 @@
       alert:(title,message,opts={})=>openDialog({title,message,kind:'alert',...opts})
     };
   }
-  const tag = 'finance-tracker-unified-panel-v413';
+  const tag = 'finance-tracker-unified-panel-v414';
   if (customElements.get(tag)) return;
   class Unified extends HTMLElement {
     constructor() {
@@ -123,10 +123,10 @@
       this.started=true;
       this.error='';
       const modules=[
-        ['finance-tracker-panel-v413','/api/finance_tracker/ui/ledger.js?v=4_1_3'],
-        ['finance-tracker-planning-panel-v413','/api/finance_tracker/ui/planning.js?v=4_1_3'],
-        ['finance-tracker-templates-panel-v413','/api/finance_tracker/ui/templates.js?v=4_1_3'],
-        ['finance-tracker-closing-panel-v413','/api/finance_tracker/ui/closing.js?v=4_1_3']
+        ['finance-tracker-panel-v414','/api/finance_tracker/ui/ledger.js?v=4_1_4'],
+        ['finance-tracker-planning-panel-v414','/api/finance_tracker/ui/planning.js?v=4_1_4'],
+        ['finance-tracker-templates-panel-v414','/api/finance_tracker/ui/templates.js?v=4_1_4'],
+        ['finance-tracker-closing-panel-v414','/api/finance_tracker/ui/closing.js?v=4_1_4']
       ];
       try {
         for(const [name,url] of modules) {
@@ -209,7 +209,7 @@
         [hidden]{display:none!important}
         @media(max-width:540px){.bar{padding:10px}.inner{gap:8px;padding-right:0}.brand{font-size:16px}.nav{width:100%;margin-left:0}.nav button{padding:9px 5px;font-size:12px;min-width:0}.help-dialog{max-height:92dvh}.help-body{padding:14px}}
       </style>
-      <header class="bar"><div class="inner"><div><div class="brand">Finance Tracker <span class="tag">4.1.3</span></div><div class="tag">Haushaltsfinanzen · HA2.0</div></div><button type="button" id="help-open" class="help-button" aria-label="Hilfe öffnen" title="Hilfe">?</button>
+      <header class="bar"><div class="inner"><div><div class="brand">Finance Tracker <span class="tag">__FT_MANIFEST_VERSION__</span></div><div class="tag">Haushaltsfinanzen · HA2.0</div></div><button type="button" id="help-open" class="help-button" aria-label="Hilfe öffnen" title="Hilfe">?</button>
       <nav class="nav" aria-label="Finance Tracker Bereiche">
       <button type="button" data-tab="master" aria-selected="false" aria-controls="ledger">Stammdaten</button>
       <button type="button" data-tab="planning" aria-selected="false" aria-controls="planning">Finanzplanung</button>
@@ -218,7 +218,7 @@
       </nav></div></header>
       <div id="status" class="info" role="status">Oberfläche wird geladen …</div>
       <div id="content" hidden><section id="templates" aria-label="Monatsvorlage" hidden></section><section id="planning" aria-label="Finanzplanung" hidden></section><section id="ledger" aria-label="Monatsübersicht"></section><section id="closing" aria-label="Abschluss" hidden></section></div>
-      <div id="help-overlay" class="help-overlay" hidden><div class="help-backdrop" data-help-close></div><section class="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><header class="help-head"><div><div class="tag">Finance Tracker 4.1.3</div><strong id="help-title">Hilfe · Kapitelübersicht</strong></div><button type="button" data-help-close aria-label="Hilfe schließen">✕</button></header><div class="help-body"><p class="help-intro">Kapitel zum Aufklappen auswählen. Pflichtangaben und optionale Angaben sind jeweils getrennt beschrieben.</p>
+      <div id="help-overlay" class="help-overlay" hidden><div class="help-backdrop" data-help-close></div><section class="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><header class="help-head"><div><div class="tag">Finance Tracker __FT_MANIFEST_VERSION__</div><strong id="help-title">Hilfe · Kapitelübersicht</strong></div><button type="button" data-help-close aria-label="Hilfe schließen">✕</button></header><div class="help-body"><p class="help-intro">Kapitel zum Aufklappen auswählen. Pflichtangaben und optionale Angaben sind jeweils getrennt beschrieben.</p>
 <details class="help-chapter"><summary>0 | Ersteinrichtung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Einrichtungsreihenfolge</legend><p>Kontoinhaber, Konten und Eröffnungsbestände anlegen; Kategorien prüfen; anschließend Monatsplanung erstellen und Buchungen erfassen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Bankbezeichnungen, Kontofavoriten und Monatsvorlagen können die spätere Bedienung erleichtern.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Eröffnungsbestand zu einem festen Stichtag übernehmen. Buchungen, die darin bereits enthalten sind, nicht erneut erfassen.</p></fieldset></div></details>
 <details class="help-chapter"><summary>1 | Stammdaten</summary><div class="help-chapter-content"><details class="help-chapter"><summary>1.1 | Kontenverwaltung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Kontenverwaltung</legend><p>Kontoinhaber, Kontoname, Kontotyp, Eröffnungsdatum und Eröffnungsbestand hinterlegen. Für Lastschrift ist ein Konto erforderlich; Umbuchungen benötigen zwei unterschiedliche Konten.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Bank, Anzeigename, Favoriten, Kontodifferenz-Toleranz und kontospezifische Automatikfreigabe.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Umbuchung Giro → Tagesgeld: Giro als Quellkonto und Tagesgeld als Zielkonto auswählen. Automatik benötigt die Freigabe beider Konten.</p></fieldset></div></details><details class="help-chapter"><summary>1.2 | Kontoinhaber</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Kontoinhaber</legend><p>Mindestens einen Inhaber anlegen und jedem Konto zuordnen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Weitere Inhaber zur Trennung von Kontogruppen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Kurze, eindeutige Namen verwenden; ein Inhaber mit Konten kann nicht gelöscht werden.</p></fieldset></div></details><details class="help-chapter"><summary>1.3 | Kategorien</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Kategorien</legend><p>Für Buchungen passende Einnahmen- und Ausgabenkategorien bereitstellen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Unterkategorien für detailliertere Auswertungen ergänzen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Ausgaben → Versicherungen → Kfz-Versicherung.</p></fieldset></div></details></div></details>
 <details class="help-chapter"><summary>2 | Finanzplanung</summary><div class="help-chapter-content"><details class="help-chapter"><summary>2.1 | Monatsplanung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Monatsplanung</legend><p>Monat, Bezeichnung, Art und Planbetrag erfassen. Bei Lastschrift Buchungstag und Konto, bei Umbuchung zusätzlich ein abweichendes Zielkonto angeben.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Lastschrift, positionsbezogene Automatik, Vorlage und Übernahme in offene Monatsentwürfe.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Versicherung mit 49,95 € zum 15. planen; Automatik nur bei verlässlichem Betrag aktivieren.</p></fieldset></div></details><details class="help-chapter"><summary>2.2 | Monatsvorlage</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Monatsvorlage</legend><p>Bezeichnung, Art, Betrag und gültige Kalendermonate festlegen.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Kategorie und Konto ergänzen; bei Lastschrift ist das Konto verpflichtend.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Jährliche Kfz-Versicherung nur im zutreffenden Monat auswählen. Grüne Monatsschaltflächen kennzeichnen die Auswahl.</p></fieldset></div></details><details class="help-chapter"><summary>2.3 | Monatsentwicklung</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Monatsentwicklung</legend><p>Für einen aussagekräftigen Verlauf müssen entsprechende Planmonate vorhanden sein.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Monatliche Entwicklungen und Abweichungen zur Orientierung vergleichen.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Wiederkehrende Kosten über mehrere Monate betrachten, statt einen Einzelmonat isoliert zu bewerten.</p></fieldset></div></details><details class="help-chapter"><summary>2.4 | Plan-Ist-Vergleich</summary><div class="help-chapter-content"><fieldset class="help-fieldset"><legend>Pflicht · Plan-Ist-Vergleich</legend><p>Planpositionen und zugeordnete Ist-Buchungen kontrollieren.</p></fieldset><fieldset class="help-fieldset"><legend>Optional</legend><p>Fehlende Zuordnungen ergänzen und Abweichungen nachbearbeiten.</p></fieldset><fieldset class="help-fieldset"><legend>Tipp &amp; Beispiel</legend><p>Plan 50 €, Ist 49,95 €: Zuordnung herstellen, Differenz bleibt sichtbar.</p></fieldset></div></details></div></details>
@@ -285,10 +285,10 @@
       const content=this.shadowRoot.getElementById('content');
       if(!content || content.dataset.mounted==='yes') return;
       content.dataset.mounted='yes';
-      const templates=document.createElement('finance-tracker-templates-panel-v413');
-      const planning=document.createElement('finance-tracker-planning-panel-v413');
-      const ledger=document.createElement('finance-tracker-panel-v413');
-      const closing=document.createElement('finance-tracker-closing-panel-v413');
+      const templates=document.createElement('finance-tracker-templates-panel-v414');
+      const planning=document.createElement('finance-tracker-planning-panel-v414');
+      const ledger=document.createElement('finance-tracker-panel-v414');
+      const closing=document.createElement('finance-tracker-closing-panel-v414');
       content.querySelector('#templates').appendChild(templates);
       content.querySelector('#planning').appendChild(planning);
       content.querySelector('#ledger').appendChild(ledger);

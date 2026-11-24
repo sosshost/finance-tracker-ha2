@@ -1,5 +1,27 @@
 # Changelog
 
+## 4.1.4 (2026-11-24)
+
+### Added
+- Expanded direct debit diagnostics and hierarchical account grouping with separate income, expense and transfer totals.
+
+### Changed
+- New monthly plans are created exclusively from current monthly templates.
+- Centralized version display.
+
+### Fixed
+- Account and category persistence, direct debit configuration propagation, both sides of transfers, and unnecessary SQLite schema writes.
+
+### Migration
+- No manual database migration required; existing data and IDs retained.
+
+### Compatibility
+- Restart Home Assistant and reload the frontend after upgrading. DEV11 functionality was live-accepted by the maintainer.
+
+### Known limitations
+- Historical direct debit conflicts are not automatically repaired.
+
+
 ## 4.1.3 — Intermediate development snapshot (2026-11-22)
 
 ### Added

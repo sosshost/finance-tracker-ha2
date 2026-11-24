@@ -1,6 +1,6 @@
 /* Finance Tracker 4.0 · Monatsabschluss: separate responsive fourth main view. */
 (() => {
-  const tag='finance-tracker-closing-panel-v413';
+  const tag='finance-tracker-closing-panel-v414';
   if(customElements.get(tag))return;
   class ClosingPanel extends HTMLElement {
     constructor(){super();this.attachShadow({mode:'open'});this.month=new Date().toLocaleDateString('sv-SE').slice(0,7);this._hass=null;this.report=null;this.error='';this.busy=false;this.groupOpen={};this.findingGroupOpen={};this.edits={};this.request=0;this.view='close';}

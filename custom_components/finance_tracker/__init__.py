@@ -248,7 +248,7 @@ def _register_templates(hass: HomeAssistant) -> None:
     )
     @websocket_api.async_response
     async def template_command(hass, connection, msg):
-        if msg["op"] == "save" and "debit_enabled" in msg["data"] and not connection.user.is_admin:
+        if (msg["op"] == "propagate" or (msg["op"] == "save" and "debit_enabled" in msg["data"])) and not connection.user.is_admin:
             connection.send_error(msg["id"], "unauthorized", "Lastschriftmerkmale dürfen nur Administratoren ändern")
             return
         await _run_worker(

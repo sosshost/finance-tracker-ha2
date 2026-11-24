@@ -184,6 +184,21 @@ class Ledger:
                 categories = [dict(r) for r in db.execute('SELECT * FROM ft_categories ORDER BY kind,name')]
                 month = validate_month(data.get('month') or date.today().strftime('%Y-%m'))
                 transactions = [dict(r) for r in db.execute('''SELECT t.*,a.name AS account_name,c.name AS category_name FROM ft_transactions t JOIN ft_accounts a ON a.id=t.account_id LEFT JOIN ft_categories c ON c.id=t.category_id WHERE t.booked LIKE ? AND t.voided=0 ORDER BY t.booked DESC,t.created DESC LIMIT 500''',(month+'%',))]
+                # Account view requires both signed legs; category overview retains the
+                # historical single logical transfer representation.
+                account_transactions = [dict(tx) for tx in transactions]
+                transfer_pairs = {}
+                for tx in account_transactions:
+                    if tx['kind'] == 'transfer' and tx['transfer_id']:
+                        transfer_pairs.setdefault(tx['transfer_id'], []).append(tx)
+                for pair in transfer_pairs.values():
+                    if len(pair) != 2 or sum(t['amount_cents'] for t in pair) != 0:
+                        continue
+                    outgoing = next(t for t in pair if t['amount_cents'] < 0)
+                    incoming = next(t for t in pair if t['amount_cents'] > 0)
+                    for leg in pair:
+                        leg.update(from_id=outgoing['account_id'], to_id=incoming['account_id'],
+                                   from_name=outgoing['account_name'], to_name=incoming['account_name'])
                 # One visual record for each atomic transfer pair. Ledger rows remain intact.
                 transfers={}
                 combined=[]
@@ -213,7 +228,7 @@ class Ledger:
                 locked_accounts = []
                 recurring = [dict(r) for r in db.execute('SELECT * FROM ft_recurring ORDER BY name')]
                 audit_count = db.execute('SELECT COUNT(*) AS n FROM ft_audit').fetchone()['n']
-                return {'recurring':recurring,'audit_count':audit_count,'accounts':accounts,'categories':categories,'transactions':transactions,'closings':closings,'month':month,'income_cents':income,'expense_cents':expense,'total_cents':sum(a['balance_cents'] for a in accounts),'transactions_truncated':len(transactions)==500,'locked_accounts':locked_accounts}
+                return {'recurring':recurring,'audit_count':audit_count,'accounts':accounts,'categories':categories,'transactions':transactions,'account_transactions':account_transactions,'closings':closings,'month':month,'income_cents':income,'expense_cents':expense,'total_cents':sum(a['balance_cents'] for a in accounts),'transactions_truncated':len(transactions)==500,'locked_accounts':locked_accounts}
             if op == 'audit_log':
                 limit = min(max(int(data.get('limit',300)),1),500)
                 month_raw=data.get('month')

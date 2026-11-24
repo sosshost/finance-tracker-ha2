@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from pathlib import Path
 
 from aiohttp import web
@@ -45,6 +47,12 @@ class FinanceTrackerAssetView(HomeAssistantView):
             return web.Response(status=404, text="Not Found")
 
         payload = await hass.async_add_executor_job(self._source.read_bytes)
+        if self._source.name == "unified.js":
+            def version():
+                value = json.loads((self._source.parent.parent / "manifest.json").read_text())["version"]
+                return value if re.fullmatch(r"[0-9A-Za-z.+-]+", value) else "unbekannt"
+            value = await hass.async_add_executor_job(version)
+            payload = payload.replace(b"__FT_MANIFEST_VERSION__", value.encode())
         return web.Response(
             body=payload,
             content_type="text/javascript",
@@ -57,6 +65,7 @@ async def _frontend_revision(hass: HomeAssistant, panel_dir: Path) -> str:
 
     def calculate() -> str:
         digest = hashlib.sha256()
+        digest.update((panel_dir.parent / "manifest.json").read_bytes())
         for _route_name, file_name in _ASSET_FILES:
             digest.update((panel_dir / file_name).read_bytes())
         digest.update((panel_dir / "planning_ui.js").read_bytes())

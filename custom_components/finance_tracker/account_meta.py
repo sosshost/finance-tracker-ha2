@@ -126,7 +126,13 @@ def action(hass, op, data):
     path = Path(hass.config.path("finance/household_v2.db"))
     with sqlite3.connect(path, timeout=10) as db:
         db.row_factory = sqlite3.Row
-        _ensure_schema(db)
+        # Read requests must not run DDL or owner backfill. Those writes used to
+        # acquire a RESERVED SQLite lock on every picker refresh.
+        if op != "list" or not all(
+            db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+            for name in ("ft_account_meta", "ft_account_owners", "ft5_debit_account_settings")
+        ):
+            _ensure_schema(db)
 
         if op == "list":
             owners = [

@@ -51,7 +51,12 @@ def connect(hass):
     db.row_factory=sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     db.execute('PRAGMA busy_timeout=5000')
-    db.executescript(SCHEMA+LINKS_SCHEMA+PROPOSALS_SCHEMA)
+    # Avoid implicit COMMIT/DDL for ordinary status reads and scheduler checks.
+    required=('ft5_debit_positions','ft5_debit_templates','ft5_debit_account_settings',
+              'ft5_debit_settings','ft5_debit_runs','ft5_debit_failures',
+              'ft5_debit_events','ft4_plan_actual_links')
+    if any(not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone() for table in required):
+        db.executescript(SCHEMA+LINKS_SCHEMA+PROPOSALS_SCHEMA)
     return db
 
 def config(db,month,pid):

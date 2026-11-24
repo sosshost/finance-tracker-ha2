@@ -1,6 +1,6 @@
 /* Finance Tracker 2.3 - self-contained Home Assistant panel */
 (() => {
-  const tag = 'finance-tracker-panel-v413';
+  const tag = 'finance-tracker-panel-v414';
   if (customElements.get(tag)) return;
   class FinancePanel extends HTMLElement {
     constructor() { super(); this.attachShadow({mode:'open'});this.shadowRoot.addEventListener('click',event=>{
@@ -16,7 +16,7 @@
   if(button.matches('[data-edit],[data-plan-edit],[data-edit-account],[data-proposal-edit],[data-proposal-afterwork],[data-match-position],[data-match-transaction],#new,#add-plan-position,#plan-create,#month-open,#month-grid-open,[data-account-open],[data-plan-open],[data-tpl-account],#choose-category')){
    this.dispatchEvent(new CustomEvent('ft-dialog-request',{bubbles:true,composed:true,detail:{owner:this}}));
   }
- },true); this.month = new Date().toLocaleDateString('sv-SE').slice(0,7); this.tab='overview'; this.context='ledger'; this.focusAccountId=''; this.data=null; this.editId=null; this.detail=null; this.summary=null; this.audit=null; this.budgets=null; this.yearData=null; this.proposals=null; this.accountMeta={}; this.accountOwners=[]; this.editAccountId=null; this.editOwnerName=null; this.newOwnerExpanded=false; this.accountEditMode=false; this.accountGroupEditing={}; this.accountGroupOpen={}; this.expandedBookingGroups=new Set(); this.proposalStatusOpen=new Set(); this.changeGroupsOpen=new Set(); this.newSubGroupId=null; this.quickExpanded=false; this.quickModal=false; this.newGroupExpanded=false; this.newSubExpanded=false; this.newAccountExpanded=false; this.availablePlanMonths=[]; this.monthListReady=false; this.monthValidation=null; this.monthValidationLoading=false; this.monthValidationError=''; this.monthValidationRequest=0; }
+ },true); this.month = new Date().toLocaleDateString('sv-SE').slice(0,7); this.tab='overview'; this.context='ledger'; this.focusAccountId=''; this.data=null; this.editId=null; this.detail=null; this.summary=null; this.audit=null; this.budgets=null; this.yearData=null; this.proposals=null; this.accountMeta={}; this.accountOwners=[]; this.editAccountId=null; this.editOwnerName=null; this.newOwnerExpanded=false; this.accountEditMode=false; this.accountGroupEditing={}; this.accountGroupOpen={}; this.expandedBookingGroups=new Set(); this.proposalStatusOpen=new Set(); this.changeGroupsOpen=new Set(); this.debitDiagnostics=null; this.debitDiagnosticsError=''; this.debitDiagnosticsLoading=false; this.debitDiagnosticsRequest=0; this.newSubGroupId=null; this.quickExpanded=false; this.quickModal=false; this.newGroupExpanded=false; this.newSubExpanded=false; this.newAccountExpanded=false; this.availablePlanMonths=[]; this.monthListReady=false; this.monthValidation=null; this.monthValidationLoading=false; this.monthValidationError=''; this.monthValidationRequest=0; }
 
     collapseLedgerGroups(render=false){
       this.expandedBookingGroups?.clear();
@@ -33,7 +33,7 @@
       if(this.data)this.render();
     }
     async openTransactionFromSearch(transactionId,action='edit'){
-      const tx=(this.data?.transactions||[]).find(t=>String(t.id)===String(transactionId));
+      const tx=(this.data?.account_transactions||this.data?.transactions||[]).find(t=>String(t.id)===String(transactionId));
       if(!tx)throw new Error('Die ausgewählte Buchung ist im geladenen Monat nicht mehr vorhanden.');
       this.dispatchEvent(new CustomEvent('ft-dialog-request',{bubbles:true,composed:true,detail:{owner:this}}));
       this.context='ledger';this.tab='by_account';this.focusAccountId='';
@@ -129,8 +129,63 @@
         } else warnings.push(key+': '+(result.reason?.message||String(result.reason)));
       });
       if(this.tab==='closing')this.loadMonthValidation();
+      if(this.tab==='changes')this.loadDebitDiagnostics();
       if(warnings.length)this.message='Einige Zusatzdaten sind nicht verfügbar: '+warnings.join('; ');
       this.render();
+    }
+    async loadDebitDiagnostics(){
+      if(!this._hass)return;
+      const month=this.month, request=++this.debitDiagnosticsRequest;
+      this.debitDiagnostics=null;this.debitDiagnosticsError='';this.debitDiagnosticsLoading=true;this.render();
+      try{
+        const [info,plan,planning]=await Promise.all([
+          this._hass.callWS({type:'finance_tracker/direct_debit',op:'info',data:{month}}),
+          this._hass.callWS({type:'finance_tracker/plan_edit',op:'info',data:{month}}),
+          this._hass.callWS({type:'finance_tracker/planning_v3',month})
+        ]);
+        if(request!==this.debitDiagnosticsRequest||month!==this.month)return;
+        this.debitDiagnostics={info,plan,planning};
+      }catch(error){
+        if(request!==this.debitDiagnosticsRequest||month!==this.month)return;
+        this.debitDiagnosticsError=error?.message||String(error);
+      }finally{
+        if(request===this.debitDiagnosticsRequest&&month===this.month){this.debitDiagnosticsLoading=false;this.render();}
+      }
+    }
+    renderDebitDiagnostics(){
+      const data=this.debitDiagnostics;
+      const historical=data?.info?.failures||[];
+      const failures=[...historical];
+      for(const r of data?.planning?.rows||[]){
+        if(!['income','expense','saving_transfer'].includes(r.kind))continue;
+        const id=String(r.position_id||'');
+        const cfg=data.info.positions?.[id]||(id.startsWith('tpl:')?data.plan.debit_templates?.[id.slice(4)]:null)||{};
+        const aid=data.plan.account_assignments?.[id];
+        const target=id.startsWith('tpl:')?data.plan.template_transfer_targets?.[id.slice(4)]:data.plan.manual_transfer_targets?.[id];
+        if(cfg.enabled&&(!aid||aid!==cfg.account_id||(r.kind==='saving_transfer'&&(!target||target!==cfg.to_account_id)))&&!failures.some(f=>f.position_id===id&&String(f.reason).includes('Kontozuordnung der Planposition stimmt nicht')))failures.push({position_id:id,reason:'Kontozuordnung der Planposition stimmt nicht mit Lastschriftmerkmal überein',current:true});
+      }
+      const rows=data?.planning?.rows||[];
+      const positions=data?.plan?.positions||[];
+      const accountNames=new Map((data?.plan?.accounts||[]).map(a=>[String(a.id),a.name]));
+      const accountLabel=id=>id?this.esc(accountNames.get(String(id))||'Konto nicht mehr vorhanden'):'Nicht zugeordnet';
+      const missingAccounts=rows.filter(r=>['income','expense','saving_transfer'].includes(r.kind)&&!data.plan.account_assignments?.[r.position_id]);
+      const missingCategories=rows.filter(r=>['income','expense'].includes(r.kind)&&!(data.plan.categories?.[r.position_id]||data.plan.mapped_categories?.[r.position_id]));
+      const missingList=(title,list)=>`<details class="ft-debit-finding"><summary><span>${title} · ${list.length}</span><span aria-hidden="true">⌄</span></summary><div class="ft-debit-finding-body"><p class="muted">Fachlich prüfen; nicht jede fehlende Zuordnung ist ein Fehler.</p>${list.map(r=>`<p>${this.esc(r.name)}</p>`).join('')||'<p>Keine offenen Zuordnungen.</p>'}</div></details>`;
+      const items=failures.map(f=>{
+        const id=String(f.position_id||'');
+        const pos=rows.find(r=>String(r.position_id)===id)||positions.find(r=>String(r.id)===id)||{};
+        const title=pos.name||'Planposition nicht mehr vorhanden';
+        const config=data.info.positions?.[id]||(id.startsWith('tpl:')?data.plan.debit_templates?.[id.slice(4)]:null)||data.plan.debit_positions?.[id]||{};
+        const planned=id.startsWith('tpl:')?data.plan.template_items?.find(x=>String(x.template_id)===id.slice(4))?.account_id:data.plan.account_assignments?.[id];
+        const debitAccount=config.account_id;
+        const mismatch=String(f.reason||'').includes('Kontozuordnung der Planposition stimmt nicht');
+        const target=id.startsWith('tpl:')?data.plan.template_transfer_targets?.[id.slice(4)]:data.plan.manual_transfer_targets?.[id];
+        const currentMismatch=Boolean(config.enabled&&(!planned||planned!==debitAccount||(pos.kind==='saving_transfer'&&(!target||target!==config.to_account_id))));
+        const status=mismatch?(currentMismatch?'Aktueller Zuordnungskonflikt':'Historischer Befund – Kontokonflikt derzeit nicht nachweisbar'):'Gespeicherter Prüfbefund';
+        const explanation=mismatch?`<div class="ft-debit-compare"><span>Plan-Konto: <strong>${accountLabel(planned)}</strong></span><span>Lastschriftkonto: <strong>${accountLabel(debitAccount)}</strong></span></div><p class="muted">Prüfen unter Finanzplanung → Monatspositionen → Planposition bearbeiten: zugeordnetes Konto und Lastschrift-Einstellungen müssen übereinstimmen. Keine automatische Änderung.</p>`:`<p class="muted">Die Planposition und ihre Lastschrift-Freigabe prüfen; bei einer Kontofreigabe unter Kontenverwaltung → Kontostammdaten nachsehen.</p>`;
+        return `<details class="ft-debit-finding"><summary><span>${this.esc(title)}</span><span aria-hidden="true">⌄</span></summary><div class="ft-debit-finding-body"><p><strong>${this.esc(status)}</strong></p><p>${this.esc(f.reason||'Unbekannter Prüfbefund')}</p>${explanation}</div></details>`;
+      }).join('');
+      return `<section class="panel ft-debit-diagnostics"><details><summary class="ft-debit-diagnostics-toggle"><span><strong>Lastschrift-Automatik · Prüfbefunde</strong><small>${this.debitDiagnosticsLoading?'Wird geladen …':this.debitDiagnosticsError?'Diagnose nicht verfügbar':`${failures.length} Prüfbefunde · ${Object.keys(data?.info?.runs||{}).length} automatisch verbucht`}</small></span><span class="ft-debit-diagnostics-symbol" aria-hidden="true">⌄</span></summary><div class="ft-debit-diagnostics-content">${this.debitDiagnosticsLoading?'<p class="muted">Diagnose wird geladen …</p>':this.debitDiagnosticsError?`<p role="alert">${this.esc(this.debitDiagnosticsError)}</p><button type="button" data-debit-diagnostics-retry>Erneut prüfen</button>`:!data?'<p class="muted">Noch keine Diagnosedaten geladen.</p>':`<p class="muted">Prüfprotokoll für ${this.esc(this.label(this.month))}. Aktuelle Kontokonflikte und historische Automatik-Prüfbefunde werden getrennt gekennzeichnet. Fehlende Konten ohne Lastschrift sind nicht automatisch Fehler. Keine Buchungen oder Konten werden geändert.</p>${items||'<p class="muted">Keine Prüfbefunde.</p>'}${missingList('Planpositionen ohne Konto',missingAccounts)}${missingList('Einnahmen/Ausgaben ohne Kategorie',missingCategories)}<button type="button" data-debit-diagnostics-retry>Erneut prüfen</button>`}</div></details></section>`;
     }
     async loadMonthValidation(){
       if(!this._hass)return;
@@ -328,7 +383,7 @@
         const links=p.links||[];
         const lockedAccounts=new Set(this.data?.locked_accounts||[]);
         const linked=links.map(l=>{
-          const tx=(this.data?.transactions||[]).find(t=>String(t.id)===String(l.transaction_id));
+          const tx=(this.data?.account_transactions||this.data?.transactions||[]).find(t=>String(t.id)===String(l.transaction_id));
           const locked=!tx||lockedAccounts.has(tx.account_id)||(tx.kind==='transfer'&&lockedAccounts.has(tx.to_id));
           const actions=locked?'<small class="ft22-line-locked">Gesperrt</small>':`<span class="ft22-line-actions"><button type="button" class="booking-pencil ft-pencil" data-ft22-edit-booking="${esc(l.transaction_id)}" title="Buchung bearbeiten" aria-label="${esc(l.description)} bearbeiten">✎</button><button type="button" data-ft22-void-booking="${esc(l.transaction_id)}" title="Buchung stornieren" aria-label="${esc(l.description)} stornieren">Stornieren</button></span>`;
           return `<div class="ft22-line"><span class="ft22-line-info">${esc(l.description)} <small>${esc(l.booked)}</small></span><span class="ft22-line-right"><strong>${money(l.amount_cents)}</strong>${actions}</span></div>`;
@@ -338,7 +393,9 @@
       };
       const sections=labels.map(([kind,label])=>{const items=positions.filter(p=>p.kind===kind),plan=items.reduce((a,p)=>a+p.plan_cents,0),actual=items.reduce((a,p)=>a+p.actual_cents,0);return `<section class="ft22-section"><h3>${label} <small>${money(actual)} / ${money(plan)}</small></h3>${items.map(card).join('')||'<p class="muted">Keine Planpositionen vorhanden.</p>'}</section>`;}).join('');
       const unassigned=transactions.filter(t=>t.unallocated_cents>0);
-      const orphan=unassigned.map(t=>{const candidates=positions.filter(p=>p.kind===(t.kind==='transfer'?'saving_transfer':t.kind));return `<form class="ft22-unassigned" data-ft22-unassigned="${esc(t.id)}"><div><strong>${esc(t.description)}</strong><small>${esc(t.booked)} · ${money(t.unallocated_cents)} nicht zugeordnet</small></div><div class="account-picker ft22-picker"><select class="account-native" name="position_id" required><option value="">Planposition auswählen</option>${candidates.map(p=>`<option value="${esc(p.position_id)}">${esc(p.name)}</option>`).join('')}</select><button type="button" class="account-trigger" data-ft22-picker="position" aria-haspopup="dialog"><span><strong data-ft22-picker-title>Planposition auswählen</strong><small>Passende Planposition suchen</small></span><span class="account-chevron">⌄</span></button></div><button type="submit" ${!candidates.length?'disabled':''}>Zuordnen</button></form>`;}).join('');
+      const unassignedKind=t=>t.kind==='transfer'?'Umbuchung':t.kind==='income'?'Einnahme':'Ausgabe';
+      const unassignedCategory=t=>t.kind==='transfer'?'Kontenbewegung':(t.category_name||'Ohne Kategorie');
+      const orphan=unassigned.map(t=>{const candidates=positions.filter(p=>p.kind===(t.kind==='transfer'?'saving_transfer':t.kind));return `<form class="ft22-unassigned" data-ft22-unassigned="${esc(t.id)}"><div><strong>${esc(t.description)}</strong><small>${esc(unassignedKind(t))} · ${esc(unassignedCategory(t))}</small><small>${esc(t.booked)} · ${money(t.unallocated_cents)} nicht zugeordnet</small></div><div class="account-picker ft22-picker"><select class="account-native" name="position_id" required><option value="">Planposition auswählen</option>${candidates.map(p=>`<option value="${esc(p.position_id)}">${esc(p.name)}</option>`).join('')}</select><button type="button" class="account-trigger" data-ft22-picker="position" aria-haspopup="dialog"><span><strong data-ft22-picker-title>Planposition auswählen</strong><small>Passende Planposition suchen</small></span><span class="account-chevron">⌄</span></button></div><button type="submit" ${!candidates.length?'disabled':''}>Zuordnen</button><button type="button" class="ft-pencil" data-ft22-edit-booking="${esc(t.id)}" aria-label="${esc(t.description)} bearbeiten" title="Buchung bearbeiten">✎</button></form>`;}).join('');
       return `<div class="ft22-workspace"><div class="ft22-workspace-title"><strong>Monatspositionen & Buchungen</strong></div>${sections}<section class="ft22-section"><h3>Ohne Planposition <small>${unassigned.length} Buchung(en)</small></h3>${orphan||'<p class="muted">Alle Buchungen sind vollständig zugeordnet.</p>'}</section></div>`;
     }
     render(){
@@ -376,7 +433,26 @@
       .quick-panel .ft22-quick-footer #quick-save{position:static!important;bottom:auto!important;margin:0!important;box-shadow:none!important;width:100%;min-height:46px}
       .quick-panel .ft22-quick-close{width:100%;min-height:42px;margin:0;font-weight:600}
       @media(max-width:520px){.quick-panel{padding:12px}.quick-panel .quick-create{gap:8px}}
-      </style>`;
+      
+/* DEV8: compact, opt-in diagnostics within Buchungsänderungen. */
+.ft-debit-diagnostics{margin:0 0 13px!important;min-width:0}
+.ft-debit-diagnostics details>summary{cursor:pointer;list-style:none}
+.ft-debit-diagnostics details>summary::-webkit-details-marker{display:none}
+.ft-debit-diagnostics-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:42px}
+.ft-debit-diagnostics-toggle>span:first-child{display:grid;gap:4px;min-width:0}
+.ft-debit-diagnostics-toggle strong{font-size:15px}
+.ft-debit-diagnostics-toggle small{font-size:12px;color:var(--secondary-text-color,#98a4b7)}
+.ft-debit-diagnostics-symbol{font-size:20px;color:#5ccbc4}
+.ft-debit-diagnostics details[open]>.ft-debit-diagnostics-toggle .ft-debit-diagnostics-symbol{transform:rotate(180deg)}
+.ft-debit-diagnostics-content{border-top:1px solid var(--divider-color,#394657);margin-top:10px;padding-top:12px;display:grid;gap:9px}
+.ft-debit-finding{border:1px solid var(--divider-color,#394657);border-radius:11px;min-width:0}
+.ft-debit-finding>summary{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:11px 12px;min-height:42px;overflow-wrap:anywhere}
+.ft-debit-finding>summary span:first-child{min-width:0;font-weight:600}
+.ft-debit-finding-body{border-top:1px solid var(--divider-color,#394657);padding:11px 12px;font-size:13px;overflow-wrap:anywhere}
+.ft-debit-finding-body p{margin:0 0 8px}
+.ft-debit-compare{display:grid;gap:5px;margin:8px 0}
+@media(max-width:420px){.ft-debit-diagnostics-toggle strong{font-size:14px}.ft-debit-finding>summary{padding:9px 10px}}
+</style>`;
       const style=`<style>.category-group-title{color:#5ccbc4!important;font-weight:750!important;letter-spacing:.045em}.category-inline{margin:8px 0 16px;padding:12px;border:1px solid var(--divider-color,#394657);border-radius:12px}:host{display:block;color:var(--primary-text-color,#e8edf3);background:var(--primary-background-color,#111827);min-height:100vh;font:inherit}*{box-sizing:border-box}.wrap{width:100%;max-width:1180px;margin:auto;padding:20px 16px 70px;min-width:0}.wrap>*,.booking-list,.account-groups,.category-tree{width:100%;max-width:100%;min-width:0}.booking-list{margin-top:14px}.account-groups{display:grid!important;gap:14px;margin-top:14px}.account-groups>.panel{margin:0}.owner-group-total{text-align:right;font-weight:750;font-size:20px;font-variant-numeric:tabular-nums;padding:0 0 10px;border-bottom:1px solid var(--divider-color,#394657);margin-bottom:7px}.owner-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.category-tree-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,285px),1fr));gap:12px;margin-top:12px;align-items:start}.category-kind-block{margin-top:16px}.category-kind-title{margin:0 0 10px;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#5ccbc4}.category-owner{height:100%}.category-owner{border:1px solid var(--divider-color,#394657);border-radius:12px;padding:14px;min-width:0}.category-owner h3{margin:4px 0}.category-children{padding-left:14px;margin-top:9px;border-left:2px solid rgba(45,212,191,.25)}.category-children .cat-row{min-width:0}.finance-head{position:sticky;top:0px;z-index:8;background:var(--primary-background-color,#111827);padding:12px 4px;border-bottom:1px solid var(--divider-color,#394657);margin:-12px -4px 16px;box-shadow:0 6px 14px rgba(0,0,0,.16)}.finance-head h1{font-size:25px;font-weight:760;letter-spacing:-.5px;margin:4px 0}.finance-head .month-controls{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.finance-head .month-controls button,.finance-head .month-controls select{min-height:42px;padding:10px 12px;border-radius:10px}.ft-header-search{position:relative;right:auto;top:auto;flex:0 0 38px;width:38px;min-width:38px;height:38px;padding:0!important;border-color:transparent!important;background:transparent!important;display:grid;place-items:center;z-index:2}.ft-header-search:hover{background:color-mix(in srgb,var(--primary-text-color,#e8edf3) 8%,transparent)!important}.ft-header-search svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.ft-page-head>.month-controls{padding-top:0;flex:1 1 auto;min-width:0}.ft22-header-identity{min-width:0}.change-workspace{display:grid;gap:14px}.change-intro{margin:0}.change-day{display:grid;gap:9px}.change-day-title{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#5ccbc4;margin:8px 2px 0}.change-card{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:8px 14px;padding:14px 15px;border:1px solid var(--divider-color,#394657);border-radius:13px;background:var(--card-background-color,#1e293b)}.change-main{min-width:0}.change-action{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#5ccbc4}.change-subject{font-size:15px;font-weight:750;margin-top:3px;overflow-wrap:anywhere}.change-detail{font-size:12px;color:var(--secondary-text-color,#98a4b7);margin-top:4px;line-height:1.45}.change-meta{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.change-meta strong,.change-meta small{display:block}.change-meta small{margin-top:4px}.change-empty{padding:18px;border:1px dashed var(--divider-color,#394657);border-radius:12px;color:var(--secondary-text-color,#98a4b7)}.balance-row{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--divider-color,#394657)}.balance-row .balance-name{min-width:0;overflow-wrap:anywhere}.balance-row .balance-value{white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}.account-line .balance-value{flex:0 0 auto;white-space:nowrap;text-align:right;margin-left:auto;font-variant-numeric:tabular-nums}.account-line .account-name{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}h1{font-size:26px;margin:0 0 4px}h2{font-size:19px;margin:0 0 15px}p,small,.muted{color:var(--secondary-text-color,#98a4b7)}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}.tabs{display:flex;gap:7px;overflow-x:auto;margin:18px 0}.tabs button{white-space:nowrap}.tabs button.active{background:var(--primary-color,#4c9aff);color:white;border-color:transparent}button,input,select{font:inherit}button{background:var(--card-background-color,#1e293b);color:inherit;border:1px solid var(--divider-color,#394657);border-radius:10px;padding:10px 13px;cursor:pointer}button.primary{background:var(--primary-color,#4c9aff);color:white;border:0}button.danger{border-color:#c65f5f;color:#ffb4b4;background:transparent}button:disabled{opacity:.55}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.metric,.panel{background:var(--card-background-color,#1e293b);border:1px solid var(--divider-color,#394657);border-radius:15px;padding:18px}.metric strong{display:block;font-size:25px;margin-top:8px;font-variant-numeric:tabular-nums}.panel{margin:14px 0}.forms{display:grid;grid-template-columns:repeat(auto-fit,minmax(275px,1fr));gap:14px}.forms .panel{margin:0}form{display:grid;gap:10px}label{display:grid;gap:5px;font-size:13px;color:var(--secondary-text-color,#98a4b7)}input,select{width:100%;min-width:0;background:var(--primary-background-color,#111827);color:var(--primary-text-color,#fff);border:1px solid var(--divider-color,#45536a);border-radius:9px;padding:10px}table{width:100%;border-collapse:collapse;font-size:14px}th{text-align:left;color:var(--secondary-text-color,#98a4b7);font-weight:500}td,th{padding:11px 8px;border-bottom:1px solid var(--divider-color,#394657)}.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}.scroll{overflow-x:auto}.notice{padding:12px;border-radius:10px;background:var(--secondary-background-color,#29364a);margin:12px 0}.actions{display:flex;gap:5px;justify-content:flex-end;flex-wrap:wrap}.actions button{padding:6px 8px;font-size:12px}.positive{color:#43c48a}.negative{color:#fa8d8d}.account-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.account-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:12px}.account-line{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--divider-color,#394657)}.account-line:last-child{border:0}.account-line span{min-width:0;overflow-wrap:anywhere}.account-line strong{white-space:nowrap;font-variant-numeric:tabular-nums}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--secondary-text-color,#98a4b7)}.account-total{font-size:25px;font-weight:750;letter-spacing:-.03em;font-variant-numeric:tabular-nums}.account-note{font-size:12px;line-height:1.5}.account-groups .panel{margin:0}.cat-row{display:flex;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--divider-color,#394657)}@media(min-width:780px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:520px){.wrap{padding:15px 10px 55px}.metric{padding:12px}.metric strong{font-size:19px}td,th{padding:9px 5px;font-size:12px}}.quick-panel{max-width:760px;margin:0 auto 18px}.quick-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:14px 0}.quick-tabs button{padding:12px 5px;font-size:13px}.quick-tabs button.active{background:var(--primary-color,#4c9aff);border-color:transparent;color:#fff}.quick-amount{font-size:27px;font-weight:700;padding:13px 14px;font-variant-numeric:tabular-nums}.quick-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.quick-grid label{min-width:0}.quick-panel #quick-save{min-height:48px;font-weight:700}@media(max-width:520px){.quick-grid{grid-template-columns:1fr}.quick-tabs button{font-size:12px}}[hidden]{display:none!important}.account-field{display:grid;gap:5px;min-width:0}.account-field-label{font-size:13px;color:var(--secondary-text-color,#98a4b7)}.account-native{position:absolute!important;width:1px!important;height:1px!important;opacity:0!important;pointer-events:none!important}.account-trigger{width:100%;display:flex;align-items:center;justify-content:space-between;text-align:left;padding:10px 13px;min-height:55px;background:var(--primary-background-color,#111827);border:1px solid var(--divider-color,#45536a)}.account-trigger strong,.account-trigger small{display:block;line-height:1.35}.account-trigger strong{font-size:14px;font-weight:600}.account-trigger small{font-size:11px;margin-top:3px}.account-chevron{font-size:23px;color:#75c7c4}.account-modal{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:14px}.account-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.75)}.account-dialog{position:relative;width:min(100%,480px);max-height:min(82dvh,720px);display:flex;flex-direction:column;background:var(--card-background-color,#1b2633);border:1px solid var(--divider-color,#3d4b59);border-radius:17px;overflow:hidden;box-shadow:0 18px 70px #0009}.account-dialog-head{padding:13px 15px;display:flex;justify-content:space-between;align-items:center}.account-dialog-head strong{font-size:16px}.account-dialog-head button{border:0;padding:5px 9px;background:transparent}.account-dialog-search{padding:0 13px 10px}.account-dialog-search input{font-size:14px;padding:10px 12px}.account-dialog-list{overflow-y:auto;overscroll-behavior:contain;padding:0 9px 12px}.account-picker-group h3{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--secondary-text-color,#9aa8b6);margin:14px 7px 4px}.account-picker-row{width:100%;border:0;border-bottom:1px solid var(--divider-color,#344353);border-radius:0;display:flex;align-items:center;justify-content:space-between;text-align:left;gap:8px;padding:10px 9px;min-height:52px;background:transparent}.account-picker-row.selected{background:rgba(78,191,187,.12);border-radius:8px}.account-picker-info{min-width:0}.account-picker-info strong,.account-picker-info small{display:block;overflow-wrap:anywhere}.account-picker-info strong{font-size:14px;font-weight:600;line-height:1.3}.account-picker-info small{font-size:11px;margin-top:3px}.account-picker-check{color:#72c9c5;font-size:18px}.account-modal [hidden]{display:none!important}@media(max-width:520px){.account-modal{padding:9px}.account-dialog{max-height:85dvh}}.finance-head{margin-bottom:19px}.finance-head h1{font-size:25px;letter-spacing:-.035em;margin:4px 0}.month-controls{display:flex;gap:6px;align-items:center}.month-controls select{width:auto;min-width:155px;max-width:210px}.month-controls button{min-width:36px;padding:9px 8px}.account-more{width:100%;text-align:left;font-size:13px;color:#78c8c6;border:1px solid var(--divider-color,#394657);margin:8px 0}.check-label{display:flex;flex-direction:row;align-items:center}.check-label input{width:auto}@media(max-width:520px){.finance-head{align-items:flex-start}.month-controls{width:100%}.month-controls select{flex:1;min-width:0}.change-card{grid-template-columns:minmax(0,1fr) max-content;gap:7px 10px;padding:12px}.change-subject{font-size:14px}}.change-type-group{border-top:1px solid var(--divider-color,#394657)}.change-type-group:last-child{border-bottom:1px solid var(--divider-color,#394657)}.change-type-toggle{width:100%;border:0;border-radius:0;background:transparent;padding:14px 4px;display:flex;align-items:center;justify-content:space-between;text-align:left}.change-type-toggle span:first-child{display:flex;align-items:baseline;gap:10px;min-width:0}.change-type-toggle strong{font-size:15px;color:#5ccbc4}.change-type-toggle small{font-size:12px;color:var(--secondary-text-color,#98a4b7)}.change-type-symbol{font-size:22px;color:#5ccbc4}.change-type-list{display:grid;gap:10px;padding:0 0 14px}.change-card{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:8px 14px;border:1px solid var(--divider-color,#394657);border-radius:12px;padding:13px;background:color-mix(in srgb,var(--card-background-color,#1e293b) 76%,transparent)}.change-subject{font-weight:700;font-size:15px}.change-diff{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:7px;align-items:center;margin-top:7px;color:var(--secondary-text-color,#98a4b7);font-size:13px}.change-diff span:last-child{color:var(--primary-text-color,#e8edf3)}.change-diff strong{color:#5ccbc4}.change-reason{margin-top:7px;font-size:12px;color:var(--secondary-text-color,#98a4b7)}.change-meta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;white-space:nowrap;font-size:11px;color:var(--secondary-text-color,#98a4b7)}@media(max-width:520px){.change-card{grid-template-columns:1fr}.change-meta{align-items:flex-start;flex-direction:row;flex-wrap:wrap}.change-diff{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}.change-type-toggle span:first-child{gap:7px}} .sticky-subnav{position:sticky;top:var(--ft-subnav-top,180px);z-index:9;background:var(--primary-background-color,#111827);padding:8px 0;margin:0 0 16px;border-bottom:1px solid var(--divider-color,#394657)}.proposal-line{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:12px;align-items:start}.proposal-name{min-width:0;overflow-wrap:anywhere}.proposal-amount{white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}.inline-editor-cell{padding:8px!important}.inline-editor-cell .panel{margin:0}.account-line+.panel{margin:8px 0 16px}.account-picker-row{width:100%} .sticky-header-group{position:sticky;top:0px;z-index:30;background:var(--primary-background-color,#111827);isolation:isolate}.sticky-header-group .finance-head,.sticky-header-group .sticky-subnav{position:static;top:auto;margin-bottom:0}.sticky-header-group .tabs{scrollbar-width:none;overscroll-behavior-x:contain}.sticky-header-group .tabs::-webkit-scrollbar{display:none}
 .ft-month-picker{display:inline-flex;min-width:0}.ft-month-trigger{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:145px;max-width:100%;border:1px solid var(--divider-color,#415266)!important;background:var(--card-background-color,#172536)!important;color:var(--primary-text-color,#edf3fa)!important;border-radius:11px!important;padding:9px 12px!important;font:inherit;cursor:pointer}.ft-month-trigger span{color:var(--primary-color,#38bdf8)}#month{display:none!important}.ft-month-overlay:not([hidden]){position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px}.ft-month-backdrop{position:absolute;inset:0;background:rgba(2,8,20,.72)}.ft-month-dialog{position:relative;display:flex;flex-direction:column;gap:12px;width:min(420px,100%);max-height:min(75vh,650px);padding:16px;background:var(--card-background-color,#192637);color:var(--primary-text-color,#edf3fa);border:1px solid var(--divider-color,#415266);border-radius:17px;box-shadow:0 20px 55px #0008}.ft-month-top{display:flex;align-items:center;justify-content:space-between}.ft-month-top button{border:0;background:transparent;color:inherit;font-size:19px;cursor:pointer}.ft-month-dialog input{width:100%;padding:11px 12px;border:1px solid var(--divider-color,#415266);border-radius:10px;background:var(--primary-background-color,#101722);color:inherit;font:inherit}.ft-month-list{overflow-y:auto;min-height:0;display:grid;gap:3px}.ft-month-option{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;padding:11px 12px;border:0;border-radius:9px;background:transparent;color:inherit;font:inherit;cursor:pointer}.ft-month-option:hover,.ft-month-option.is-current{background:rgba(20,184,166,.16)}.ft-month-option.is-current{color:#4de0d1;font-weight:700}.ft-month-empty{padding:12px;color:var(--secondary-text-color,#9ca3af)}
 
@@ -511,6 +587,9 @@
 .account-booking-title{grid-area:title;display:block!important;min-width:0!important;width:100%!important;max-width:100%!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:var(--primary-text-color,#e8edf3)!important;text-align:left!important;text-decoration:none!important;font-weight:650!important;line-height:1.35!important;overflow-wrap:anywhere!important}
 .account-booking-value{grid-area:value;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;line-height:1.35}
 .account-booking-category{grid-area:category;min-width:0;color:var(--secondary-text-color,#98a4b7);line-height:1.35;overflow-wrap:anywhere}
+/* DEV2: transfers are neutral account movements, not income/expense. */
+.account-booking-value.ft-transfer-in,.account-booking-category.ft-transfer-in{color:#14B8A6!important}
+.account-booking-value.ft-transfer-out,.account-booking-category.ft-transfer-out{color:#A78BFA!important}
 .account-booking-date{grid-area:date;text-align:right;white-space:nowrap;color:var(--secondary-text-color,#98a4b7);font-variant-numeric:tabular-nums;line-height:1.35}
 .account-booking-actions{margin-top:11px;padding-top:10px;border-top:1px solid var(--divider-color,#394657)}
 .account-booking-actions .actions{justify-content:flex-start!important;gap:9px!important;flex-wrap:wrap!important}
@@ -518,6 +597,69 @@
 .account-booking-list tbody>tr.booking-editor-row{display:block!important;width:100%!important;max-width:100%!important;margin:0 0 13px!important}
 .account-booking-list tbody>tr.booking-editor-row>td{display:block!important;width:100%!important;max-width:100%!important;padding:0!important;border:0!important}
 @media(max-width:520px){.account-booking-card{padding:12px}.account-booking-main{grid-template-columns:minmax(0,7fr) minmax(82px,3fr);column-gap:9px}.account-booking-title{font-size:14px!important}.account-booking-value,.account-booking-category,.account-booking-date{font-size:12px}}
+
+
+/* DEV3: Buchungen nach Konto – Inhaber > Bank > Kontoname. */
+.ft-by-account-owner{min-width:0;margin:0 0 14px;padding:10px 12px;border:1px solid var(--divider-color,#394657);border-radius:14px;background:var(--card-background-color,#1d2734)}
+.ft-by-account-owner-toggle{width:100%;min-height:42px;padding:5px 2px!important;color:var(--primary-text-color,#e8edf3)!important;font-size:16px!important}
+.ft-by-account-owner-content[hidden]{display:none!important}
+.ft-by-account-owner-content{padding-top:10px;min-width:0}
+.ft-by-account-bank{min-width:0;max-width:100%;margin:0 0 13px;padding:10px 12px 4px;border:1px solid var(--divider-color,#394657);border-radius:12px;box-sizing:border-box}
+.ft-by-account-bank legend{padding:0 8px;color:var(--primary-text-color,#e8edf3);font-weight:750;font-size:14px;max-width:90%;overflow-wrap:anywhere}
+.ft-by-account-account{min-width:0;margin:0 0 15px}
+.ft-by-account-account+.ft-by-account-account{padding-top:13px;border-top:1px solid var(--divider-color,#394657)}
+.ft-by-account-account-title{font-size:13px;font-weight:700;color:var(--secondary-text-color,#98a4b7);margin:0 0 10px;overflow-wrap:anywhere}
+.ft-by-account-table{width:100%;min-width:0;max-width:100%;border-collapse:collapse}
+@media(max-width:520px){.ft-by-account-owner{padding:8px}.ft-by-account-bank{padding:9px 8px 2px}.ft-by-account-owner-toggle{font-size:15px!important}}
+
+
+/* DEV7: override the legacy .booking-list .ft-list-group-toggle flex rule.
+   Both levels use the same right-anchored columns, independent of label length. */
+.booking-list .ft-by-account-owner-toggle,.booking-list .ft-by-account-bank-toggle{
+  display:grid!important;grid-template-columns:minmax(0,1fr) 184px 34px!important;
+  column-gap:4px!important;align-items:center!important;justify-content:stretch!important;
+  width:100%!important;min-width:0!important;box-sizing:border-box!important;
+  min-height:44px!important;padding:3px 2px!important;gap:4px!important;text-align:left!important;
+}
+.ft-by-account-owner-name{min-width:0;overflow-wrap:anywhere;font-weight:750;color:#5ccbc4}
+.booking-list .ft-by-account-bank-toggle{min-height:44px!important}
+.ft-by-account-bank-label{min-width:0}
+.booking-list .ft-by-account-totals{
+  display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  grid-template-rows:repeat(2,21px)!important;column-gap:5px!important;row-gap:1px!important;
+  width:184px!important;min-width:0!important;justify-self:end!important;
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum";
+}
+.booking-list .ft-by-account-totals>span{
+  display:flex!important;align-items:center!important;justify-content:flex-end!important;
+  width:100%;min-width:0;padding:0 1px!important;border:0!important;border-radius:0!important;
+  background:transparent!important;white-space:nowrap;text-align:right!important;
+  font-size:12px;line-height:1.05!important;font-weight:400!important;
+}
+.booking-list .ft-by-account-owner-toggle .ft-by-account-totals>span{font-weight:700!important}
+.ft-by-account-total-income{color:#43c48a}
+.ft-by-account-total-expense{color:#fa8d8d}
+.ft-by-account-total-transfer-in{color:#14b8a6}
+.ft-by-account-total-transfer-out{color:#a78bfa}
+.ft-by-account-bank-content[hidden],.ft-by-account-owner-content[hidden]{display:none!important}
+.ft-by-account-bank-content{padding-top:7px;min-width:0}
+.booking-list .ft-by-account-owner-toggle .ft-list-group-symbol,
+.booking-list .ft-by-account-bank-toggle .ft-list-group-symbol{justify-self:end!important;margin:0!important}
+.ft-by-account-account .ft-by-account-table{table-layout:fixed}
+.ft-by-account-account .account-booking-card-cell{width:100%;max-width:100%}
+@media(max-width:520px){
+ .booking-list .ft-by-account-owner-toggle,.booking-list .ft-by-account-bank-toggle{
+   grid-template-columns:minmax(0,1fr) 166px 30px!important;column-gap:3px!important;gap:3px!important}
+ .booking-list .ft-by-account-totals{width:166px!important}
+ .booking-list .ft-by-account-totals>span{font-size:11px}
+}
+@media(max-width:360px){
+ .ft-by-account-owner,.ft-by-account-bank{padding-left:6px!important;padding-right:6px!important}
+ .booking-list .ft-by-account-owner-toggle,.booking-list .ft-by-account-bank-toggle{
+   grid-template-columns:minmax(0,1fr) 148px 28px!important;column-gap:2px!important;gap:2px!important}
+ .booking-list .ft-by-account-totals{width:148px!important}
+ .booking-list .ft-by-account-totals>span{font-size:10px}
+}
 
 /* Ein einziges Auswahlkonzept: native Selects bleiben nur als Formularwert erhalten. */
 .account-picker>.account-native,.account-picker>select.account-native{position:absolute!important;width:1px!important;height:1px!important;min-width:0!important;min-height:0!important;max-width:1px!important;padding:0!important;margin:0!important;opacity:0!important;pointer-events:none!important;overflow:hidden!important;clip-path:inset(50%)!important;border:0!important}
@@ -650,7 +792,7 @@
           const grouped=groupOrder.map(type=>({type,label:groupLabels[type],events:events.filter(e=>e.change_type===type)})).filter(g=>g.events.length);
           const other=events.filter(e=>!groupOrder.includes(e.change_type));if(other.length)grouped.push({type:'other',label:'Weitere Änderungen',events:other});
           const feed=grouped.map(group=>{const open=this.changeGroupsOpen.has(group.type);return `<section class="change-type-group"><button type="button" class="change-type-toggle" data-change-group="${this.esc(group.type)}" aria-expanded="${open}"><span><strong>${this.esc(group.label)}</strong><small>${group.events.length} ${group.events.length===1?'Änderung':'Änderungen'}</small></span><span class="change-type-symbol">${open?'−':'+'}</span></button><div class="change-type-list" ${open?'':'hidden'}>${group.events.map(eventMarkup).join('')}</div></section>`;}).join('');
-          body=`<section class="panel change-workspace"><div><h2>Buchungsänderungen · ${this.esc(this.label(this.month))}</h2><p class="change-intro">Nur nachträgliche Änderungen an bestehenden Buchungen. Neuanlagen werden nicht aufgeführt. Die Gruppen sind nach Änderungsinhalt gegliedert und innerhalb jeder Gruppe nach Änderungszeitpunkt sortiert.</p></div>${events.length?feed:'<div class="change-empty">Für diesen Monat sind keine nachträglichen Buchungsänderungen protokolliert.</div>'}${this.audit?.truncated?'<p class="muted">Es werden maximal 500 Änderungen angezeigt.</p>':''}</section>`;
+          body=this.renderDebitDiagnostics()+`<section class="panel change-workspace"><div><h2>Buchungsänderungen · ${this.esc(this.label(this.month))}</h2><p class="change-intro">Nur nachträgliche Änderungen an bestehenden Buchungen. Neuanlagen werden nicht aufgeführt. Die Gruppen sind nach Änderungsinhalt gegliedert und innerhalb jeder Gruppe nach Änderungszeitpunkt sortiert.</p></div>${events.length?feed:'<div class="change-empty">Für diesen Monat sind keine nachträglichen Buchungsänderungen protokolliert.</div>'}${this.audit?.truncated?'<p class="muted">Es werden maximal 500 Änderungen angezeigt.</p>':''}</section>`;
         }
         if(this.tab==='overview'||this.tab==='by_account'){
           const ordered=this.rankAccounts(accounts), preferred=ordered.find(a=>a.id===this.preference('account')&&this.paymentAccount(a))||ordered.find(a=>this.isFavorite(a)&&this.paymentAccount(a))||ordered.find(a=>this.paymentAccount(a));
@@ -672,29 +814,77 @@
         }
         if(this.tab==='overview'||this.tab==='by_account'){
           this.expandedBookingGroups??=new Set();
-          const bookingGroup=t=>{if(this.tab==='by_account'){const id=t.from_id||t.account_id;const a=accounts.find(x=>x.id===id);return (a?this.owner(a):'Unbekannt')+' / '+(a?this.accountLabel(a):(t.account_name||id));}const type=t.kind==='transfer'?'Umbuchungen':t.kind==='income'?'Einnahmen':'Ausgaben';const category=t.kind==='transfer'?'Konten':(t.category_name||'Ohne Kategorie').split(' · ')[0].trim();return type+' / '+category;};
+          const bookingGroup=t=>{if(this.tab==='by_account'){return String(t.account_id||'');}const type=t.kind==='transfer'?'Umbuchungen':t.kind==='income'?'Einnahmen':'Ausgaben';const category=t.kind==='transfer'?'Konten':(t.category_name||'Ohne Kategorie').split(' · ')[0].trim();return type+' / '+category;};
           const bookingKindRank=k=>this.tab==='by_account'?0:k.startsWith('Ausgaben /')?0:k.startsWith('Umbuchungen /')?1:2;
-          const arrangedTransactions=[...(d.transactions||[])].filter(t=>this.tab!=='by_account'||!this.focusAccountId||[t.account_id,t.from_id,t.to_id].includes(this.focusAccountId)).sort((a,b)=>{const aa=bookingGroup(a),bb=bookingGroup(b);return bookingKindRank(aa)-bookingKindRank(bb)||aa.localeCompare(bb,'de')||b.booked.localeCompare(a.booked);});
+          const arrangedTransactions=[...(this.tab==='by_account'?(d.account_transactions||d.transactions||[]):(d.transactions||[]))].filter(t=>this.tab!=='by_account'||!this.focusAccountId||t.account_id===this.focusAccountId).sort((a,b)=>{const aa=bookingGroup(a),bb=bookingGroup(b);return bookingKindRank(aa)-bookingKindRank(bb)||aa.localeCompare(bb,'de')||b.booked.localeCompare(a.booked);});
           let previousBookingGroup='';
-          const rows=arrangedTransactions.map(t=>{
+          const bookingRowParts=arrangedTransactions.map(t=>{
             const bookingGroupKey=bookingGroup(t),groupStart=bookingGroupKey!==previousBookingGroup;previousBookingGroup=bookingGroupKey;
             const groupExpanded=this.expandedBookingGroups.has(bookingGroupKey);
-            const groupHead=groupStart?`<tr class="booking-category-header"><td colspan="4"><button type="button" class="ft-list-group-toggle" data-booking-group="${this.esc(bookingGroupKey)}" aria-expanded="${groupExpanded}"><span>${this.esc(bookingGroupKey)}</span><span class="ft-list-group-symbol">${groupExpanded?'−':'+'}</span></button></td></tr>`:'';
+            const groupHead=this.tab==='by_account'?'':groupStart?`<tr class="booking-category-header"><td colspan="4"><button type="button" class="ft-list-group-toggle" data-booking-group="${this.esc(bookingGroupKey)}" aria-expanded="${groupExpanded}"><span>${this.esc(bookingGroupKey)}</span><span class="ft-list-group-symbol">${groupExpanded?'−':'+'}</span></button></td></tr>`:'';
 
             const transfer=t.kind==='transfer';
-            const amt=transfer?Math.abs(t.amount_cents):t.amount_cents;
+            const amt=t.amount_cents;
             const day=this.esc(t.booked.slice(8,10)+'.'+t.booked.slice(5,7)+'.');
-            const categoryLabel=transfer?'Umbuchung':this.esc(t.category_name||'Ohne Kategorie');
+            const categoryLabel=transfer?(t.amount_cents<0?'Umbuchung · Ausgang → '+this.esc(t.to_name||'Zielkonto'):'Umbuchung · Eingang ← '+this.esc(t.from_name||'Ausgangskonto')):this.esc(t.category_name||'Ohne Kategorie');
             const actions=editable(t)?`<div class="actions"><button type="button" data-edit="${this.esc(t.id)}" class="booking-pencil ft-pencil" title="Buchung bearbeiten" aria-label="${transfer?'Umbuchung':'Buchung'} bearbeiten">✎</button><button type="button" data-void="${this.esc(t.id)}">Stornieren</button></div>`:'<small>Gesperrt</small>';
-            const cell=`<td colspan="4" class="account-booking-card-cell"><div class="account-booking-card"><div class="account-booking-main"><div class="account-booking-title">${this.esc(t.description)}</div><strong class="account-booking-value ${transfer?'':t.amount_cents>=0?'positive':'negative'}">${this.money(amt)}</strong><div class="account-booking-category">${categoryLabel}</div><div class="account-booking-date">${day}</div></div><div class="account-booking-actions">${actions}</div></div></td>`;
+            const transferColor=transfer?(amt<0?'ft-transfer-out':'ft-transfer-in'):'';
+            const cell=`<td colspan="4" class="account-booking-card-cell"><div class="account-booking-card"><div class="account-booking-main"><div class="account-booking-title">${this.esc(t.description)}</div><strong class="account-booking-value ${transfer?transferColor:(t.amount_cents>=0?'positive':'negative')}">${this.money(amt)}</strong><div class="account-booking-category ${transferColor}">${categoryLabel}</div><div class="account-booking-date">${day}</div></div><div class="account-booking-actions">${actions}</div></div></td>`;
             const edit=transfer?`<tr class="booking-editor-row"><td colspan="4" class="inline-editor-cell"><section class="panel"><h2>Umbuchung bearbeiten</h2><p>Ursprungs- und Zielkonto werden gemeinsam geändert. Beide Kontobewegungen bleiben erhalten.</p><form data-op="edit_transfer"><input type="hidden" name="id" value="${this.esc(t.id)}"/><label>Datum<input name="booked" type="date" value="${this.esc(t.booked)}" required/></label><label>Ursprungskonto${this.accountPicker('transfer-edit-from',accounts,t.from_id||t.account_id)}</label><label>Zielkonto${this.accountPicker('transfer-edit-to',accounts,t.to_id||'')}</label><label>Betrag (€)<input name="amount_eur" value="${(Math.abs(t.amount_cents)/100).toFixed(2).replace('.',',')}" inputmode="decimal" required/></label><label>Beschreibung<input name="description" value="${this.esc(t.description)}" maxlength="240" required/></label><label>Änderungsgrund<input name="reason" required maxlength="240" placeholder="Warum wird die Umbuchung korrigiert?"/></label><div class="actions"><button type="submit" class="primary">Änderung speichern</button><button type="button" id="cancel-edit">Abbrechen</button></div></form></section></td></tr>`:
             `<tr class="booking-editor-row"><td colspan="4" class="inline-editor-cell"><section class="panel"><h2>Buchung korrigieren</h2><p>Änderungen werden mit Begründung im Prüfprotokoll gespeichert.</p><form data-op="edit_transaction"><input type="hidden" name="id" value="${this.esc(t.id)}"/><label>Art<select id="edit-kind" name="kind"><option value="expense" ${t.kind==='expense'?'selected':''}>Ausgabe</option><option value="income" ${t.kind==='income'?'selected':''}>Einnahme</option></select></label><label>Datum<input name="booked" type="date" value="${this.esc(t.booked)}" required/></label><label>Konto${this.accountPicker('edit-account',accounts,t.account_id)}</label><label>Betrag (€)<input name="amount_eur" value="${this.esc(t.amount_expression||(Math.abs(t.amount_cents)/100).toFixed(2).replace('.',','))}" required type="text" inputmode="text" autocomplete="off"/></label><label>Beschreibung<input name="description" value="${this.esc(t.description)}" maxlength="240" required/></label><label>Kategorie${this.categoryPicker(categories.filter(c=>c.kind===t.kind),t.category_id,'edit-category')}</label><label>Änderungsgrund<input name="reason" required maxlength="240" placeholder="Warum wird die Buchung korrigiert?"/></label><div class="actions"><button type="submit" class="primary">Änderung speichern</button><button type="button" id="cancel-edit">Abbrechen</button></div></form></section></td></tr>`;
-            return `${groupHead}<tr class="account-booking-row ft-booking-group-item" data-booking-group-item="${this.esc(bookingGroupKey)}" data-transaction-id="${this.esc(t.id)}" ${groupExpanded?'':'hidden'}>${cell}</tr>${this.editId===t.id&&editable(t)?edit.replace('class="booking-editor-row"',`class="booking-editor-row ft-booking-group-item" data-booking-group-item="${this.esc(bookingGroupKey)}" ${groupExpanded?'':'hidden'}`):''}`;
-          }).join('')||'<tr><td colspan="4">Noch keine Buchungen.</td></tr>';
+            return `${groupHead}<tr class="account-booking-row ft-booking-group-item" data-booking-group-item="${this.esc(bookingGroupKey)}" data-transaction-id="${this.esc(t.id)}" ${this.tab==='by_account'?'':(groupExpanded?'':'hidden')}>${cell}</tr>${this.editId===t.id&&editable(t)?edit.replace('class="booking-editor-row"',`class="booking-editor-row ft-booking-group-item" data-booking-group-item="${this.esc(bookingGroupKey)}" ${this.tab==='by_account'?'':(groupExpanded?'':'hidden')}`):''}`;
+          });
+          const rows=this.tab==='by_account' ? (()=>{
+            const grouped=new Map();
+            arrangedTransactions.forEach((t,i)=>{
+              const account=accounts.find(a=>a.id===t.account_id);
+              const owner=account?this.owner(account):'Unbekannter Inhaber';
+              const bank=account?this.bank(account):'Ohne Bankangabe';
+              const accountId=String(t.account_id||'');
+              if(!grouped.has(owner))grouped.set(owner,new Map());
+              const banks=grouped.get(owner);
+              if(!banks.has(bank))banks.set(bank,new Map());
+              const bankAccounts=banks.get(bank);
+              if(!bankAccounts.has(accountId))bankAccounts.set(accountId,{account,rows:[]});
+              bankAccounts.get(accountId).rows.push(bookingRowParts[i]);
+            });
+            if(!grouped.size)return '<p class="muted">Noch keine Buchungen.</p>';
+            // DEV5: derive all four movement classes from account-specific transaction sides.
+            // A transfer is never counted as income or expense.
+            const totalsFor=(items)=>items.reduce((sum,t)=>{
+              const amount=Number(t.amount_cents)||0;
+              if(t.kind==='income')sum.income+=Math.abs(amount);
+              else if(t.kind==='expense')sum.expense+=Math.abs(amount);
+              else if(t.kind==='transfer'){
+                if(amount>=0)sum.transferIn+=Math.abs(amount);
+                else sum.transferOut+=Math.abs(amount);
+              }
+              return sum;
+            },{income:0,expense:0,transferIn:0,transferOut:0});
+            const totalsMarkup=totals=>`<span class="ft-by-account-totals" aria-label="Einnahmen ${this.money(totals.income)}, Ausgaben ${this.money(totals.expense)}, Umbuchungseingang ${this.money(totals.transferIn)}, Umbuchungsausgang ${this.money(totals.transferOut)}"><span class="ft-by-account-total-income" title="Einnahmen">${this.money(Math.abs(totals.income)) .replace(/^\+?/, '+')}</span><span class="ft-by-account-total-expense" title="Ausgaben">${this.money(-Math.abs(totals.expense))}</span><span class="ft-by-account-total-transfer-in" title="Umbuchung · Eingang">${this.money(Math.abs(totals.transferIn)).replace(/^\+?/, '+')}</span><span class="ft-by-account-total-transfer-out" title="Umbuchung · Ausgang">${this.money(-Math.abs(totals.transferOut))}</span></span>`;
+            const txForAccounts=bankAccounts=>{const ids=new Set(bankAccounts.keys());return arrangedTransactions.filter(t=>ids.has(String(t.account_id||'')));};
+            return [...grouped].map(([owner,banks])=>{
+              const ownerKey='owner:'+owner;
+              const ownerOpen=this.expandedBookingGroups.has(ownerKey);
+              const ownerTx=[...banks.values()].flatMap(txForAccounts);
+              const bankMarkup=[...banks].map(([bank,bankAccounts])=>{
+                const bankKey='bank:'+JSON.stringify([owner,bank]);
+                const bankOpen=this.expandedBookingGroups.has(bankKey);
+                const bankTotals=totalsFor(txForAccounts(bankAccounts));
+                const accountsMarkup=[...bankAccounts].map(([accountId,group])=>{
+                  const a=group.account;
+                  const title=a?this.accountLabel(a):(arrangedTransactions.find(t=>String(t.account_id||'')===accountId)?.account_name||'Unbekanntes Konto');
+                  return `<section class="ft-by-account-account"><h4 class="ft-by-account-account-title">${this.esc(title)}</h4><table class="ft-by-account-table"><tbody>${group.rows.join('')}</tbody></table></section>`;
+                }).join('');
+                return `<fieldset class="ft-by-account-bank"><legend>${this.esc(bank)}</legend><button type="button" class="ft-list-group-toggle ft-by-account-bank-toggle" data-booking-group="${this.esc(bankKey)}" aria-expanded="${bankOpen}"><span class="ft-by-account-bank-label" aria-hidden="true"></span>${totalsMarkup(bankTotals)}<span class="ft-list-group-symbol">${bankOpen?'−':'+'}</span></button><div class="ft-by-account-bank-content" ${bankOpen?'':'hidden'}>${accountsMarkup}</div></fieldset>`;
+              }).join('');
+              return `<section class="ft-by-account-owner"><button type="button" class="ft-list-group-toggle ft-by-account-owner-toggle" data-booking-group="${this.esc(ownerKey)}" aria-expanded="${ownerOpen}"><span class="ft-by-account-owner-name">${this.esc(owner)}</span>${totalsMarkup(totalsFor(ownerTx))}<span class="ft-list-group-symbol">${ownerOpen?'−':'+'}</span></button><div class="ft-by-account-owner-content" ${ownerOpen?'':'hidden'}>${bankMarkup}</div></section>`;
+            }).join('');
+          })() : (bookingRowParts.join('')||'<tr><td colspan="4">Noch keine Buchungen.</td></tr>');
           if(this.tab==='overview'){
             body+=this.renderPlanWorkspace();
           }else{
-          body+=`<div class="booking-list account-booking-list"><div class="scroll"><table><tbody>${rows}</tbody></table></div>${d.transactions_truncated?'<p>Es werden maximal 500 Buchungen angezeigt.</p>':''}</div>`;
+          body+=`<div class="booking-list account-booking-list"><div class="scroll">${this.tab==='by_account'?rows:`<table><tbody>${rows}</tbody></table>`}</div>${d.transactions_truncated?'<p>Es werden maximal 500 Buchungen angezeigt.</p>':''}</div>`;
 
           }
         }
@@ -819,7 +1009,7 @@
       this.shadowRoot.querySelectorAll('[data-master-picker]').forEach(b=>b.addEventListener('click',()=>this.openMasterPicker(b.dataset.masterPicker,b.dataset.masterPickerLabel||'Auswahl')));
       this.shadowRoot.getElementById('toggle-new-group')?.addEventListener('click',()=>{this.newGroupExpanded=!this.newGroupExpanded;this.render();});
       this.shadowRoot.querySelectorAll('[data-new-sub-group]').forEach(b=>b.addEventListener('click',()=>{this.newSubGroupId=this.newSubGroupId===b.dataset.newSubGroup?null:b.dataset.newSubGroup;this.render();}));this.shadowRoot.querySelectorAll('[data-cancel-new-sub]').forEach(b=>b.addEventListener('click',()=>{this.newSubGroupId=null;this.render();}));
-      this.shadowRoot.querySelectorAll('[data-booking-group]').forEach(b=>b.addEventListener('click',()=>{const key=b.dataset.bookingGroup;const open=!this.expandedBookingGroups.has(key);if(open)this.expandedBookingGroups.add(key);else this.expandedBookingGroups.delete(key);b.setAttribute('aria-expanded',String(open));b.querySelector('.ft-list-group-symbol').textContent=open?'−':'+';this.shadowRoot.querySelectorAll('[data-booking-group-item]').forEach(r=>{if(r.dataset.bookingGroupItem===key)r.hidden=!open;});}));
+      this.shadowRoot.querySelectorAll('[data-booking-group]').forEach(b=>b.addEventListener('click',()=>{const key=b.dataset.bookingGroup;const open=!this.expandedBookingGroups.has(key);if(open)this.expandedBookingGroups.add(key);else this.expandedBookingGroups.delete(key);b.setAttribute('aria-expanded',String(open));b.querySelector('.ft-list-group-symbol').textContent=open?'−':'+';const content=b.classList.contains('ft-by-account-bank-toggle')?b.parentElement?.querySelector('.ft-by-account-bank-content'):b.closest('.ft-by-account-owner')?.querySelector('.ft-by-account-owner-content');if(content)content.hidden=!open;this.shadowRoot.querySelectorAll('[data-booking-group-item]').forEach(r=>{if(r.dataset.bookingGroupItem===key)r.hidden=!open;});}));
       this.shadowRoot.querySelectorAll('[data-proposal-status]').forEach(b=>b.addEventListener('click',()=>{const status=b.dataset.proposalStatus;const open=!this.proposalStatusOpen.has(status);if(open)this.proposalStatusOpen.add(status);else this.proposalStatusOpen.delete(status);this.render();}));
       this.shadowRoot.querySelectorAll('[data-change-group]').forEach(b=>b.addEventListener('click',()=>{const key=b.dataset.changeGroup;const open=!this.changeGroupsOpen.has(key);if(open)this.changeGroupsOpen.add(key);else this.changeGroupsOpen.delete(key);this.render();}));
       this.shadowRoot.querySelectorAll('[data-ft22-toggle]').forEach(b=>b.addEventListener('click',()=>{const id=b.dataset.ft22Toggle;this.planWorkspaceOpen??=new Set();const anchor=b.getBoundingClientRect().top;
@@ -876,7 +1066,8 @@
         if(window.matchMedia?.('(pointer:fine)').matches)search.focus({preventScroll:true});
       }));
       this.shadowRoot.querySelectorAll('[data-ft22-assign],[data-ft22-unassigned]').forEach(f=>f.addEventListener('submit',async e=>{e.preventDefault();const positionId=f.dataset.ft22Assign||f.querySelector('[name=position_id]')?.value;const transactionId=f.dataset.ft22Unassigned||f.querySelector('[name=transaction_id]')?.value;const tx=(this.planActual?.transactions||[]).find(t=>String(t.id)===String(transactionId));const button=f.querySelector('[type=submit]');if(!positionId||!tx||Number(tx.unallocated_cents)<=0){await window.FTDialog.alert('Plan-Ist-Zuordnung','Bitte eine gültige Planposition und eine offene Buchung auswählen.');return;}if(button)button.disabled=true;try{const result=await this._hass.callWS({type:'finance_tracker/plan_actual',op:'assign',data:{month:this.month,position_id:positionId,transaction_id:transactionId,amount_cents:Number(tx.unallocated_cents)}});if(!result?.assigned)throw new Error('Das Backend hat die Zuordnung nicht bestätigt.');await this.refresh();const linked=(this.planActual?.links||[]).some(l=>l.transaction_id===transactionId&&l.position_id===positionId);if(!linked)throw new Error('Zuordnung wurde nach Aktualisierung nicht gefunden. Bitte erneut prüfen.');this.message='Buchung zugeordnet';this.render();}catch(err){this.message='Zuordnung fehlgeschlagen: '+(err.message||String(err));await window.FTDialog.alert('Plan-Ist-Zuordnung',this.message);}finally{if(button?.isConnected)button.disabled=false;}}));
-      this.shadowRoot.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{this.tab=b.dataset.tab;this.quickExpanded=false;this.quickModal=false;this.message='';this.proposalEdit=null;this.proposalAfterwork=null;this.editId=null;this.planLinkId=null;this.detail=null;this.editAccountId=null;this.editOwnerName=null;this.newAccountExpanded=false;this.newOwnerExpanded=false;this.newSubExpanded=false;this.newGroupExpanded=false;this.render();if(this.tab==='closing')this.loadMonthValidation();}));
+      this.shadowRoot.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{this.tab=b.dataset.tab;this.quickExpanded=false;this.quickModal=false;this.message='';this.proposalEdit=null;this.proposalAfterwork=null;this.editId=null;this.planLinkId=null;this.detail=null;this.editAccountId=null;this.editOwnerName=null;this.newAccountExpanded=false;this.newOwnerExpanded=false;this.newSubExpanded=false;this.newGroupExpanded=false;this.render();if(this.tab==='closing')this.loadMonthValidation();if(this.tab==='changes')this.loadDebitDiagnostics();}));
+      this.shadowRoot.querySelectorAll('[data-debit-diagnostics-retry]').forEach(b=>b.addEventListener('click',()=>this.loadDebitDiagnostics()));
       this.shadowRoot.querySelectorAll('[data-validation-retry]').forEach(b=>b.addEventListener('click',()=>this.loadMonthValidation()));
       this.shadowRoot.querySelector('[data-ha-sidebar]')?.addEventListener('click',()=>this.dispatchEvent(new Event('hass-toggle-menu',{bubbles:true,composed:true})));
  this.shadowRoot.getElementById('month-open')?.addEventListener('click',()=>this.openMonthGrid());
