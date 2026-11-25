@@ -120,7 +120,8 @@ def list_proposals(hass,month):
                 'note':'Vorschlagsstatus und Restbetrag berücksichtigen ausdrücklich zugeordnete Plan-Ist-Buchungen. Vollständig gedeckte Planpositionen gelten als gebucht.'}
 
 
-def decide(hass,data):
+def decide(hass,data,actor=None):
+    ledger=Ledger(hass,actor)
     month=validate_month(data.get('month'))
     source_name=str(data.get('source_name',''))
     kind=str(data.get('kind',''))
@@ -148,7 +149,7 @@ def decide(hass,data):
             if old['status']!='skipped' or old['transaction_id']:
                 raise HomeAssistantError('Nur entfallene Vorschläge ohne Ist-Buchung können wieder geöffnet werden')
             db.execute('DELETE FROM ft3_proposal_decisions WHERE month=? AND source_name=? AND kind=?',(month,source_name,kind))
-            Ledger(hass)._audit(db,'proposal_reopen',{'month':month,'source_name':source_name,'kind':kind})
+            ledger._audit(db,'proposal_reopen',{'month':month,'source_name':source_name,'kind':kind})
             return {'status':'open','transaction_id':None}
         if action=='skip' and actual_before:
             raise HomeAssistantError('Position hat bereits Ist-Zuordnungen und kann nicht als vollständig entfallen markiert werden')
@@ -184,6 +185,7 @@ def decide(hass,data):
             transaction_id=uuid4().hex
             db.execute('INSERT INTO ft_transactions VALUES(?,?,?,?,?,?,?,?,?,0)',
                        (transaction_id,booked,account_id,category_id,booking_kind,signed,description,None,now()))
+            ledger.record_creator(db,transaction_id)
             # Confirmation of this specific planning proposal explicitly authorizes the
             # corresponding plan/actual link. Changed booking kinds are not auto-matched.
             if position_id and booking_kind==kind:
@@ -197,7 +199,7 @@ def decide(hass,data):
                    (month,source_name,kind,decision_status,transaction_id,now()))
         actual_after=_actual_for_position(db,month,position_id)
         effective_status='confirmed' if actual_after>=planned_abs and planned_abs>0 else ('skipped' if action=='skip' and actual_after==0 else 'open')
-        Ledger(hass)._audit(db,'proposal_'+action,{'month':month,'source_name':source_name,'kind':kind,
+        ledger._audit(db,'proposal_'+action,{'month':month,'source_name':source_name,'kind':kind,
             'transaction_id':transaction_id,'booking_kind':booking_kind if action=='confirm' else None,
             'planned_cents':row['amount_cents'],'actual_before_cents':actual_before,'actual_after_cents':actual_after,
             'remaining_after_cents':max(0,planned_abs-actual_after)})

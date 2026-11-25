@@ -17,6 +17,7 @@ PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS ft_accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,opening_cents INTEGER NOT NULL,opening_date TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ft_categories(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,UNIQUE(name,kind));
 CREATE TABLE IF NOT EXISTS ft_transactions(id TEXT PRIMARY KEY,booked TEXT NOT NULL,account_id TEXT NOT NULL,category_id TEXT,kind TEXT NOT NULL,amount_cents INTEGER NOT NULL,description TEXT NOT NULL,transfer_id TEXT,created TEXT NOT NULL,voided INTEGER NOT NULL DEFAULT 0,FOREIGN KEY(account_id) REFERENCES ft_accounts(id),FOREIGN KEY(category_id) REFERENCES ft_categories(id));
+CREATE TABLE IF NOT EXISTS ft_transaction_creators(transaction_id TEXT PRIMARY KEY REFERENCES ft_transactions(id) ON DELETE CASCADE,user_id TEXT,display_name TEXT,automatic INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_ft_transactions_date ON ft_transactions(booked);
 CREATE INDEX IF NOT EXISTS idx_ft_transactions_account ON ft_transactions(account_id);
 CREATE TABLE IF NOT EXISTS ft_closings(month TEXT NOT NULL,account_id TEXT NOT NULL,actual_cents INTEGER NOT NULL,calculated_cents INTEGER NOT NULL,closed TEXT NOT NULL,PRIMARY KEY(month,account_id),FOREIGN KEY(account_id) REFERENCES ft_accounts(id));
@@ -52,7 +53,8 @@ def validate_month(value):
 from .closing_balance import balance, differences
 
 class Ledger:
-    def __init__(self, hass):
+    def __init__(self, hass, actor=None):
+        self.actor = actor
         self.path = Path(hass.config.path('finance/household_v2.db'))
 
     def _db(self):
@@ -121,8 +123,23 @@ class Ledger:
             raise HomeAssistantError('Betragsgleichung ist ungültig oder stimmt nicht mit dem Buchungsbetrag überein') from exc
         db.execute('INSERT OR REPLACE INTO ft_amount_expressions(transaction_id,expression) VALUES(?,?)',(ident,expression))
 
+    def record_creator(self, db, transaction_id):
+        if self.actor:
+            db.execute('INSERT INTO ft_transaction_creators VALUES(?,?,?,?)',
+                       (transaction_id, self.actor.get('id'), self.actor.get('name'), int(bool(self.actor.get('automatic')))))
+
+    @staticmethod
+    def actor_label(actor, names):
+        if not actor:
+            return None
+        if actor.get('automatic'):
+            return 'Automatisch erfasst'
+        return names.get(actor.get('id')) or actor.get('name') or None
+
     def _audit(self, db, action, payload):
         import json
+        if self.actor:
+            payload = {**payload, "actor": self.actor}
         db.execute('INSERT INTO ft_audit VALUES(?,?,?,?)',(uuid4().hex,now(),action,json.dumps(payload,ensure_ascii=False)))
 
     def _ensure_open(self, db, booked, account_ids):
@@ -183,7 +200,13 @@ class Ledger:
                     a['balance_cents'] = self._balance(db,a)
                 categories = [dict(r) for r in db.execute('SELECT * FROM ft_categories ORDER BY kind,name')]
                 month = validate_month(data.get('month') or date.today().strftime('%Y-%m'))
-                transactions = [dict(r) for r in db.execute('''SELECT t.*,a.name AS account_name,c.name AS category_name FROM ft_transactions t JOIN ft_accounts a ON a.id=t.account_id LEFT JOIN ft_categories c ON c.id=t.category_id WHERE t.booked LIKE ? AND t.voided=0 ORDER BY t.booked DESC,t.created DESC LIMIT 500''',(month+'%',))]
+                transactions = [dict(r) for r in db.execute('''SELECT t.*,a.name AS account_name,c.name AS category_name FROM ft_transactions t JOIN ft_accounts a ON a.id=t.account_id LEFT JOIN ft_categories c ON c.id=t.category_id WHERE t.booked LIKE ? AND t.voided=0 ORDER BY t.booked DESC,t.created DESC''',(month+'%',))]
+                creators = {r['transaction_id']: dict(r) for r in db.execute(
+                    'SELECT c.* FROM ft_transaction_creators c JOIN ft_transactions t ON t.id=c.transaction_id WHERE t.booked LIKE ?', (month+'%',))}
+                for tx in transactions:
+                    creator = creators.get(tx['id'])
+                    if creator:
+                        tx['creator_name'] = self.actor_label({'id':creator['user_id'],'name':creator['display_name'],'automatic':creator['automatic']}, data.get('_actor_names', {}))
                 # Account view requires both signed legs; category overview retains the
                 # historical single logical transfer representation.
                 account_transactions = [dict(tx) for tx in transactions]
@@ -228,7 +251,7 @@ class Ledger:
                 locked_accounts = []
                 recurring = [dict(r) for r in db.execute('SELECT * FROM ft_recurring ORDER BY name')]
                 audit_count = db.execute('SELECT COUNT(*) AS n FROM ft_audit').fetchone()['n']
-                return {'recurring':recurring,'audit_count':audit_count,'accounts':accounts,'categories':categories,'transactions':transactions,'account_transactions':account_transactions,'closings':closings,'month':month,'income_cents':income,'expense_cents':expense,'total_cents':sum(a['balance_cents'] for a in accounts),'transactions_truncated':len(transactions)==500,'locked_accounts':locked_accounts}
+                return {'recurring':recurring,'audit_count':audit_count,'accounts':accounts,'categories':categories,'transactions':transactions,'account_transactions':account_transactions,'closings':closings,'month':month,'income_cents':income,'expense_cents':expense,'total_cents':sum(a['balance_cents'] for a in accounts),'transactions_truncated':False,'locked_accounts':locked_accounts}
             if op == 'audit_log':
                 limit = min(max(int(data.get('limit',300)),1),500)
                 month_raw=data.get('month')
@@ -288,6 +311,7 @@ class Ledger:
                     events=[]
                     def add_change(row,change_type,label,subject,before_text='',after_text='',reason='',booked=None,amount_cents=None,transaction_id=None,payload=None):
                         events.append({'id':f"{row['id']}:{change_type}:{len(events)}",'at':row['at'],'action':row['action'],
+                                       'actor_name':self.actor_label((payload or {}).get('actor'),data.get('_actor_names',{})),
                                        'change_type':change_type,'change_label':label,'subject':subject or 'Buchung',
                                        'before_text':str(before_text or ''),'after_text':str(after_text or ''),'reason':str(reason or '').strip(),
                                        'booked':booked,'amount_cents':amount_cents,'transaction_id':transaction_id,'payload':payload or {}})
@@ -561,6 +585,7 @@ class Ledger:
                 amount=row['amount_cents'] if row['kind']=='income' else -row['amount_cents']
                 transaction_id=uuid4().hex
                 db.execute('INSERT INTO ft_transactions VALUES(?,?,?,?,?,?,?,?,?,0)',(transaction_id,booked,row['account_id'],row['category_id'],row['kind'],amount,row['description'],None,now()))
+                self.record_creator(db,transaction_id)
                 db.execute('INSERT INTO ft_recurring_runs VALUES(?,?,?,?)',(uuid4().hex,ident,month,transaction_id))
                 self._audit(db,op,{'id':transaction_id,'template_id':ident,'month':month,'amount_cents':amount,'repost_after_void':bool(db.execute('SELECT 1 FROM ft_recurring_runs WHERE template_id=? AND month=? AND transaction_id<>?',(ident,month,transaction_id)).fetchone())})
                 return {'id':transaction_id,'booked':booked}
@@ -660,6 +685,7 @@ class Ledger:
                 ident=uuid4().hex
                 signed=amount if kind=='income' else -amount
                 db.execute('INSERT INTO ft_transactions VALUES(?,?,?,?,?,?,?,?,?,0)',(ident,booked,account_id,category_id,kind,signed,description,None,now()))
+                self.record_creator(db,ident)
                 self._save_expression(db,ident,data,amount)
                 self._audit(db,op,{'id':ident,'booked':booked,'account_id':account_id,'category_id':category_id,'kind':kind,'amount_cents':signed,'description':description})
                 return {'id':ident}
@@ -681,6 +707,7 @@ class Ledger:
                 for account_id,signed in ((source,-amount),(target,amount)):
                     row_id=uuid4().hex;ids.append(row_id)
                     db.execute('INSERT INTO ft_transactions VALUES(?,?,?,?,?,?,?,?,?,0)',(row_id,booked,account_id,None,'transfer',signed,description,transfer_id,now()))
+                    self.record_creator(db,row_id)
                 self._audit(db,op,{'id':transfer_id,'booked':booked,'from_id':source,'to_id':target,'kind':'transfer','amount_cents':amount,'description':description})
                 return {'id':transfer_id,'from_transaction_id':ids[0],'to_transaction_id':ids[1]}
             if op == 'void_transaction':

@@ -114,7 +114,7 @@ def action(hass,op,data):
 def run(hass,today=None):
     today=today or dt_util.now().date()
     month=today.strftime('%Y-%m')
-    ledger=Ledger(hass)
+    ledger=Ledger(hass,{"automatic":True})
     # Snapshot outside the transaction, but re-check all authoritative state under BEGIN IMMEDIATE.
     with connect(hass) as db:
         if not db.execute('SELECT 1 FROM ft5_debit_account_settings WHERE automatic=1 LIMIT 1').fetchone():
@@ -186,6 +186,7 @@ def run(hass,today=None):
                 for tid,aid,signed in postings:
                     db.execute('INSERT INTO ft_transactions VALUES(?,?,?,?,?,?,?,?,?,0)',
                         (tid,booked.isoformat(),aid,category,('transfer' if transfer_id else kind),signed,desc,transfer_id,now()))
+                    ledger.record_creator(db,tid)
                 if kind!='saving_transfer':
                     db.execute('INSERT INTO ft4_plan_actual_links VALUES(?,?,?,?,?,?)',(uuid4().hex,month,pid,tx,amount,now()))
                 else:

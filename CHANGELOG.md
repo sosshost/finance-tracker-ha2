@@ -1,5 +1,31 @@
 # Changelog
 
+## 4.1.5 (2026-11-25)
+
+### Added
+- Daily transaction chronology with collapsed date groups, newest first.
+- Exact-cent amount search with decimal comma or point and optional sign.
+- Server-side authenticated creator and editor attribution in chronology and audit trail.
+
+### Changed
+- Harmonized HA2.0 pickers and compact group spacing.
+- Transaction editor opens without switching account/category views.
+
+### Fixed
+- Subview synchronization and competing search refreshes.
+- Removed the 500-transaction limit from monthly overview.
+
+### Migration
+- Additive ft_transaction_creators table and audit JSON fields. Existing transactions and IDs retained. Backup recommended.
+
+### Compatibility
+- Restart Home Assistant and reload frontend. Maintainer accepted DEV5 live.
+
+### Known limitations
+- Historical unknown authors remain unknown. Cancelled transactions appear in audit rather than chronology. Separate plan-to-actual editing can still switch views. Direct debit runs are attributed to automation.
+
+
+
 ## 4.1.4 (2026-11-24)
 
 ### Added

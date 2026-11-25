@@ -35,7 +35,7 @@
       alert:(title,message,opts={})=>openDialog({title,message,kind:'alert',...opts})
     };
   }
-  const tag = 'finance-tracker-unified-panel-v414';
+  const tag = 'finance-tracker-unified-panel-v415';
   if (customElements.get(tag)) return;
   class Unified extends HTMLElement {
     constructor() {
@@ -123,10 +123,10 @@
       this.started=true;
       this.error='';
       const modules=[
-        ['finance-tracker-panel-v414','/api/finance_tracker/ui/ledger.js?v=4_1_4'],
-        ['finance-tracker-planning-panel-v414','/api/finance_tracker/ui/planning.js?v=4_1_4'],
-        ['finance-tracker-templates-panel-v414','/api/finance_tracker/ui/templates.js?v=4_1_4'],
-        ['finance-tracker-closing-panel-v414','/api/finance_tracker/ui/closing.js?v=4_1_4']
+        ['finance-tracker-panel-v415','/api/finance_tracker/ui/ledger.js?v=4_1_5'],
+        ['finance-tracker-planning-panel-v415','/api/finance_tracker/ui/planning.js?v=4_1_5'],
+        ['finance-tracker-templates-panel-v415','/api/finance_tracker/ui/templates.js?v=4_1_5'],
+        ['finance-tracker-closing-panel-v415','/api/finance_tracker/ui/closing.js?v=4_1_5']
       ];
       try {
         for(const [name,url] of modules) {
@@ -272,6 +272,11 @@
           this.ledgerSubview='by_account';this.renderSubnav();
         }catch(error){ledger.message='Buchung konnte nicht geöffnet werden: '+(error.message||String(error));ledger.render();}
       });
+      this.shadowRoot.addEventListener('ft-ledger-subview',e=>{
+        const ledger=this.shadowRoot.querySelector('#ledger > *');
+        if(this.active!=='ledger'||e.target!==ledger||e.detail?.tab!=='by_account')return;
+        this.ledgerSubview='by_account';this.renderSubnav();
+      });
       this.shadowRoot.addEventListener('ft-booking-search',()=>{if(this.active==='ledger')this._openBookingSearch();});
       this.shadowRoot.addEventListener('ft-dialog-request',e=>{
         const owner=e.detail?.owner;
@@ -285,10 +290,10 @@
       const content=this.shadowRoot.getElementById('content');
       if(!content || content.dataset.mounted==='yes') return;
       content.dataset.mounted='yes';
-      const templates=document.createElement('finance-tracker-templates-panel-v414');
-      const planning=document.createElement('finance-tracker-planning-panel-v414');
-      const ledger=document.createElement('finance-tracker-panel-v414');
-      const closing=document.createElement('finance-tracker-closing-panel-v414');
+      const templates=document.createElement('finance-tracker-templates-panel-v415');
+      const planning=document.createElement('finance-tracker-planning-panel-v415');
+      const ledger=document.createElement('finance-tracker-panel-v415');
+      const closing=document.createElement('finance-tracker-closing-panel-v415');
       content.querySelector('#templates').appendChild(templates);
       content.querySelector('#planning').appendChild(planning);
       content.querySelector('#ledger').appendChild(ledger);
@@ -451,6 +456,9 @@
       }return prev[b.length];
     }
     _searchScore(transaction,query){
+      const raw=String(query??'').trim().replace(/\s*€\s*$/,'').trim();
+      const numeric=/^([+-]?)(\d+)(?:[,.](\d{1,2}))?$/.exec(raw);
+      if(numeric){const cents=Number(numeric[2])*100+Number((numeric[3]||'').padEnd(2,'0'));const amount=Number(transaction.amount_cents);if(Number.isSafeInteger(cents)&&Math.abs(amount)===cents&&(!numeric[1]||(numeric[1]==='-'?amount<0:amount>0)))return 100;if(numeric[1]||numeric[3]||raw!==String(query).trim())return 0;}
       const fields=[transaction.description,transaction.category_name,transaction.account_name,transaction.from_name,transaction.to_name];
       const normalized=this._searchNormalize(fields.filter(Boolean).join(' '));
       const terms=this._searchNormalize(query).split(' ').filter(Boolean);
@@ -468,7 +476,7 @@
     }
     _openBookingSearch(){
       const ledger=this.shadowRoot.querySelector('#ledger > *');
-      ledger?.collapseLedgerGroups?.(true);
+
       const month=ledger?.month;
       const records=ledger?.data?.transactions;
       if(!month||!Array.isArray(records)){return;}
@@ -484,7 +492,7 @@
         .ft-search-result{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;text-align:left;margin:6px 0;padding:11px;border-radius:10px;border:1px solid var(--divider-color,#394657);background:transparent;color:inherit;cursor:pointer}
         .ft-search-result span{min-width:0;overflow-wrap:anywhere}.ft-search-result small{display:block;opacity:.75;margin-top:4px;font-size:12px}.ft-search-result strong{white-space:nowrap;text-align:right}
         .ft-search-result:focus-visible{outline:2px solid var(--primary-color,#4c9aff)}
-      </style><div class="ft-search-dialog" role="dialog" aria-modal="true" aria-labelledby="ft-search-title"><div class="ft-search-head"><div><h2 id="ft-search-title">Buchungssuche</h2><small>${ledger.label?.(month)||month} · Stichwort und ähnliche Begriffe</small></div><button type="button" data-search-close aria-label="Suche schließen">✕</button></div><input class="ft-search-input" type="search" placeholder="Beschreibung, Kategorie oder Konto suchen …" aria-label="Buchungen durchsuchen"/><div class="ft-search-results" role="list"></div></div>`;
+      </style><div class="ft-search-dialog" role="dialog" aria-modal="true" aria-labelledby="ft-search-title"><div class="ft-search-head"><div><h2 id="ft-search-title">Buchungssuche</h2><small>${ledger.label?.(month)||month} · Stichwort, ähnliche Begriffe und Betrag</small></div><button type="button" data-search-close aria-label="Suche schließen">✕</button></div><input class="ft-search-input" type="search" placeholder="Betrag, Beschreibung, Kategorie oder Konto suchen …" aria-label="Buchungen durchsuchen"/><div class="ft-search-results" role="list"></div></div>`;
       this.shadowRoot.append(overlay);
       const input=overlay.querySelector('input'),results=overlay.querySelector('.ft-search-results');
       const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -494,19 +502,20 @@
       overlay.addEventListener('click',e=>{if(e.target===overlay||e.target.closest('[data-search-close]'))close();});
       const render=()=>{
         const query=input.value.trim();
-        const found=records.map(t=>({t,score:this._searchScore(t,query)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||String(b.t.booked).localeCompare(String(a.t.booked))).slice(0,100);
+        const source=/^[+-]/.test(query.trim())?(ledger.data.account_transactions||records):records;
+        const found=source.map(t=>({t,score:this._searchScore(t,query)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||String(b.t.booked).localeCompare(String(a.t.booked))).slice(0,100);
         results.innerHTML=found.length?found.map(({t})=>`<button type="button" class="ft-search-result" data-search-id="${escape(t.id)}"><span><b>${escape(t.description)}</b><small>${escape(t.booked)} · ${escape(t.category_name||'Umbuchung')} · ${escape(t.account_name||t.from_name||'')}</small></span><strong>${escape(ledger.money?.(t.amount_cents)||'')}</strong></button>`).join(''):'<p>Keine passenden Buchungen im ausgewählten Monat.</p>';
       };
       input.addEventListener('input',render);
       results.addEventListener('click',e=>{
         const btn=e.target.closest('[data-search-id]');
         if(!btn)return;
-        const tx=records.find(t=>String(t.id)===btn.dataset.searchId);
+        const tx=[...records,...(ledger.data.account_transactions||[])].find(t=>String(t.id)===btn.dataset.searchId);
         if(!tx)return;
         // Use the same navigation path as a manual click on "Buchungen nach Konto".
         // The child ledger then opens the selected transaction directly by ID; no DOM-button lookup.
         close();
-        this._chooseSubnav('by_account');
+        // The loaded month is already available; do not start a competing refresh.
         if(typeof ledger.openTransactionFromSearch!=='function'){
           ledger.message='Buchung konnte nicht geöffnet werden: Frontend-Modul nicht auf dem erwarteten Versionsstand.';
           ledger.render();
@@ -514,12 +523,10 @@
           return;
         }
         Promise.resolve(ledger.openTransactionFromSearch(tx.id)).then(()=>{
-          this.ledgerSubview='by_account';
           this.renderSubnav();
         }).catch(error=>{
           ledger.message='Buchung konnte nicht geöffnet werden: '+(error.message||String(error));
           ledger.render();
-          this.ledgerSubview='by_account';
           this.renderSubnav();
         });
       });

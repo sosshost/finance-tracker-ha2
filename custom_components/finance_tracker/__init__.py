@@ -69,6 +69,10 @@ async def _run_worker(
         connection.send_result(msg["id"], result)
 
 
+def _request_actor(connection):
+    return {'id': connection.user.id, 'name': connection.user.name}
+
+
 def _register_direct_debit(hass: HomeAssistant) -> None:
     @websocket_api.websocket_command({
         vol.Required("type"): "finance_tracker/direct_debit",
@@ -192,6 +196,7 @@ def _register_proposals(hass: HomeAssistant) -> None:
             decide_proposal,
             hass,
             data,
+            _request_actor(connection),
         )
 
     websocket_api.async_register_command(hass, proposal_command)
@@ -286,6 +291,7 @@ def _register_plan_actual(hass: HomeAssistant) -> None:
             hass,
             msg["op"],
             msg["data"],
+            _request_actor(connection),
         )
 
     websocket_api.async_register_command(hass, plan_actual_command)
@@ -350,7 +356,10 @@ def _register_ledger(hass: HomeAssistant) -> None:
     )
     @websocket_api.async_response
     async def ledger_command(hass, connection, msg):
-        ledger: Ledger = hass.data[DOMAIN][LEDGER_KEY]
+        ledger = Ledger(hass, _request_actor(connection))
+        names = {}
+        if msg["op"] in ("overview", "audit_log"):
+            names = {user.id: user.name for user in await hass.auth.async_get_users()}
         await _run_worker(
             hass,
             connection,
@@ -359,7 +368,7 @@ def _register_ledger(hass: HomeAssistant) -> None:
             "Interner Fehler; siehe HA-Protokoll",
             ledger.execute,
             msg["op"],
-            {**msg["data"], "_actor": connection.user.id},
+            {**msg["data"], "_actor": connection.user.id, "_actor_names": names},
         )
 
     websocket_api.async_register_command(hass, ledger_command)

@@ -41,7 +41,8 @@ def _plan_meta(db,month):
 
 def _table(db,name):return bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(name,)).fetchone())
 
-def action(hass,op,data):
+def action(hass,op,data,actor=None):
+ ledger=Ledger(hass,actor)
  month=validate_month(data.get('month'))
  positions=_positions(hass,month)
  with _open(hass) as db:
@@ -76,14 +77,14 @@ def action(hass,op,data):
    if not tid:raise HomeAssistantError('Buchung nicht angegeben')
    existing=[dict(r) for r in db.execute('SELECT * FROM ft4_plan_actual_links WHERE month=? AND transaction_id=?',(month,tid))]
    db.execute('DELETE FROM ft4_plan_actual_links WHERE month=? AND transaction_id=?',(month,tid))
-   if existing:Ledger(hass)._audit(db,'plan_actual_remove_transaction',{'month':month,'transaction_id':tid,'links':existing})
+   if existing:ledger._audit(db,'plan_actual_remove_transaction',{'month':month,'transaction_id':tid,'links':existing})
    return {'removed':True,'count':len(existing),'transaction_id':tid}
   if op=='remove':
    link=db.execute('SELECT * FROM ft4_plan_actual_links WHERE id=? AND month=?',(str(data.get('link_id') or ''),month)).fetchone()
    if not link:raise HomeAssistantError('Zuordnung nicht gefunden')
    link_data=dict(link)
    db.execute('DELETE FROM ft4_plan_actual_links WHERE id=?',(link['id'],))
-   Ledger(hass)._audit(db,'plan_actual_remove',{'month':month,'link_id':link_data['id'],'position_id':link_data['position_id'],'transaction_id':link_data['transaction_id'],'amount_cents':link_data['amount_cents']})
+   ledger._audit(db,'plan_actual_remove',{'month':month,'link_id':link_data['id'],'position_id':link_data['position_id'],'transaction_id':link_data['transaction_id'],'amount_cents':link_data['amount_cents']})
    return {'removed':True}
   pid=str(data.get('position_id') or '');tid=str(data.get('transaction_id') or '')
   p=next((r for r in positions if r['position_id']==pid),None)
@@ -99,5 +100,5 @@ def action(hass,op,data):
   ident=uuid4().hex
   created=now()
   db.execute('INSERT INTO ft4_plan_actual_links VALUES(?,?,?,?,?,?)',(ident,month,pid,tid,amount,created))
-  Ledger(hass)._audit(db,'plan_actual_assign',{'month':month,'link_id':ident,'position_id':pid,'position_name':p.get('name'),'transaction_id':tid,'amount_cents':amount,'origin':str(data.get('origin') or '')})
+  ledger._audit(db,'plan_actual_assign',{'month':month,'link_id':ident,'position_id':pid,'position_name':p.get('name'),'transaction_id':tid,'amount_cents':amount,'origin':str(data.get('origin') or '')})
   return {'id':ident,'assigned':True}

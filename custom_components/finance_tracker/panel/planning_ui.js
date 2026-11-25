@@ -44,7 +44,7 @@
       alert:(title,message,opts={})=>openDialog({title,message,kind:'alert',...opts})
     };
   }
-const tag='finance-tracker-planning-panel-v414';if(customElements.get(tag))return;
+const tag='finance-tracker-planning-panel-v415';if(customElements.get(tag))return;
 class Planning extends HTMLElement{
  constructor(){super();this.attachShadow({mode:'open'});this.shadowRoot.addEventListener('click',event=>{
   const button=event.composedPath().find(x=>x instanceof HTMLElement&&x.matches?.('button'));
