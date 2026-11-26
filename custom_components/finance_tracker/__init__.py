@@ -117,7 +117,7 @@ def _register_category_admin(hass: HomeAssistant) -> None:
         {
             vol.Required("type"): "finance_tracker/category_admin",
             vol.Required("op"): vol.In(
-                ["list", "add_group", "rename_group", "add_sub", "save_sub"]
+                ["list", "add_group", "rename_group", "add_sub", "save_sub", "inspect_remove", "remove", "restore"]
             ),
             vol.Optional("data", default={}): dict,
         }
@@ -326,6 +326,8 @@ def _register_ledger(hass: HomeAssistant) -> None:
         "add_account",
         "update_account",
         "delete_account",
+        "archive_account",
+        "reactivate_account",
         "add_category",
         "add_transaction",
         "transfer",

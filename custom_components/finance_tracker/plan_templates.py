@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS ft3_plan_categories(month TEXT NOT NULL,position_id T
 def connect(hass):
  db=sqlite3.connect(hass.config.path('finance/household_v2.db'),timeout=5)
  db.row_factory=sqlite3.Row
+ db.execute('CREATE TABLE IF NOT EXISTS ft_category_archive(id TEXT PRIMARY KEY)')
  db.execute('PRAGMA foreign_keys=ON');db.execute('PRAGMA busy_timeout=5000')
  required=('ft3_templates','ft3_template_plan_items','ft3_plan_exclusions','ft3_plan_categories','ft5_debit_templates','ft5_debit_positions','ft5_debit_settings','ft5_debit_account_settings','ft5_debit_runs','ft5_debit_failures','ft5_debit_events')
  if any(not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(t,)).fetchone() for t in required):db.executescript(SCHEMA+DEBIT_SCHEMA)
@@ -183,6 +184,7 @@ def action(hass,op,data):
   if op=='apply':
    tid=str(data.get('id') or '');months=sorted({validate_month(m) for m in data.get('months',[])});t=db.execute('SELECT * FROM ft3_templates WHERE id=? AND active=1 AND deleted=0',(tid,)).fetchone()
    if not t:raise HomeAssistantError('Vorlage nicht gefunden')
+   if t['category_id'] and db.execute('SELECT 1 FROM ft_category_archive WHERE id=?',(t['category_id'],)).fetchone():raise HomeAssistantError('Vorlage enthält archivierte Kategorie. Bitte zuerst korrigieren.')
    applied=[];skipped=[]
    for month in months:
     p=db.execute('SELECT status FROM ft3_plan_months WHERE month=?',(month,)).fetchone()

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS ft4_manual_plan_targets(month TEXT NOT NULL,position_
 def _open(hass):
  db=sqlite3.connect(hass.config.path('finance/household_v2.db'),timeout=5)
  db.row_factory=sqlite3.Row
+ db.execute('CREATE TABLE IF NOT EXISTS ft_category_archive(id TEXT PRIMARY KEY)')
  db.execute('PRAGMA busy_timeout=5000')
  # executescript commits implicitly and acquires write locks, even for info.
  # Run the legacy schema bootstrap only when one of its tables is missing.
@@ -44,6 +45,7 @@ def action(hass,op,data):
    for tid in set(tids):
     t=db.execute('SELECT * FROM ft3_templates WHERE id=? AND active=1 AND deleted=0',(tid,)).fetchone()
     if not t or month[5:] not in __import__('json').loads(t['months']):raise HomeAssistantError('Vorlage für diesen Kalendermonat nicht gültig')
+    if t['category_id'] and db.execute('SELECT 1 FROM ft_category_archive WHERE id=?',(t['category_id'],)).fetchone():raise HomeAssistantError('Vorlage enthält archivierte Kategorie. Bitte zuerst korrigieren.')
     # Every template, including those imported from an older plan, is a master-data
     # object in its own right. The source position_id is provenance only.
     # Materialize under tpl:<id> so the current template name, kind, account and

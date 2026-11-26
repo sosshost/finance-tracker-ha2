@@ -55,6 +55,7 @@ from .closing_balance import balance, differences
 class Ledger:
     def __init__(self, hass, actor=None):
         self.actor = actor
+        self.hass = hass
         self.path = Path(hass.config.path('finance/household_v2.db'))
 
     def _db(self):
@@ -64,6 +65,7 @@ class Ledger:
         db.execute('PRAGMA busy_timeout=5000')
         db.executescript(SCHEMA)
         db.executescript(SCHEMA_V3)
+        db.execute('CREATE TABLE IF NOT EXISTS ft_category_archive(id TEXT PRIMARY KEY)')
         db.execute('CREATE TABLE IF NOT EXISTS ft_amount_expressions(transaction_id TEXT PRIMARY KEY,expression TEXT NOT NULL,FOREIGN KEY(transaction_id) REFERENCES ft_transactions(id))')
         # V2.3: retain every recurring execution, including voided transactions.
         # Existing UNIQUE(template_id,month) must be removed without losing rows.
@@ -162,7 +164,7 @@ class Ledger:
             with db:
                 mutations={'add_transaction','transfer','edit_transaction','edit_transfer','void_transaction','post_recurring','close_month','confirm_closing'}
                 track=op in mutations
-                if track: db.execute('BEGIN IMMEDIATE')
+                if track or op in ('delete_account','archive_account','reactivate_account'): db.execute('BEGIN IMMEDIATE')
                 before=differences(db) if track else {}
                 audit_before=db.execute('SELECT COALESCE(MAX(rowid),0) FROM ft_audit').fetchone()[0] if track else 0
                 yield db
@@ -186,11 +188,55 @@ class Ledger:
             raise HomeAssistantError('Buchung nicht gefunden oder bereits storniert')
         return row
 
-    def _validate_category(self, db, category_id, kind):
+    def _validate_category(self, db, category_id, kind, existing=None):
         if category_id:
+            if category_id != existing and db.execute('SELECT 1 FROM ft_category_archive WHERE id=?',(category_id,)).fetchone():raise HomeAssistantError('Kategorie ist archiviert')
             category = db.execute('SELECT kind FROM ft_categories WHERE id=?', (category_id,)).fetchone()
             if category is None or category['kind'] != kind:
                 raise HomeAssistantError('Kategorie passt nicht zur Buchung')
+
+    def _edit_plan_allocations(self, db, ident, booked, kind, original_kind, amount, reason, data):
+        from .plan_actual import SCHEMA as LINK_SCHEMA, _positions
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft4_plan_actual_links'").fetchone():
+            if not data.get('new_plan_position'): return
+            # Do not use executescript: it would commit the enclosing edit transaction.
+            for statement in LINK_SCHEMA.split(';'):
+                if statement.strip(): db.execute(statement)
+        if 'allocations' in data:
+            old_links = {r['id']: dict(r) for r in db.execute('SELECT * FROM ft4_plan_actual_links WHERE transaction_id=?',(ident,))}
+            changes = data['allocations']
+            if not isinstance(changes, list) or any(not isinstance(x,dict) for x in changes):
+                raise HomeAssistantError('Ungültige Zuordnungen')
+            if len(changes)!=len(old_links) or {x.get('id') for x in changes}!=set(old_links):
+                raise HomeAssistantError('Zuordnungen wurden zwischenzeitlich geändert. Bitte aktualisieren.')
+            for x in changes:
+                old = old_links[x['id']]
+                n = x.get('amount_cents')
+                if type(n) is not int or n<0 or x.get('previous_cents')!=old['amount_cents']:
+                    raise HomeAssistantError('Ungültige oder zwischenzeitlich geänderte Zuordnung')
+                if n and (old['month']!=booked[:7] or kind!=original_kind):
+                    raise HomeAssistantError('Bei Monats- oder Artwechsel Zuordnungen entfernen.')
+                if n!=old['amount_cents']:
+                    if n: db.execute('UPDATE ft4_plan_actual_links SET amount_cents=? WHERE id=?',(n,old['id']))
+                    else: db.execute('DELETE FROM ft4_plan_actual_links WHERE id=?',(old['id'],))
+                    self._audit(db,'plan_actual_edit' if n else 'plan_actual_remove',{'month':old['month'],'position_id':old['position_id'],'transaction_id':ident,'link_id':old['id'],'amount_cents':n,'before_cents':old['amount_cents'],'reason':reason})
+        pid = str(data.get('new_plan_position') or '')
+        if pid:
+            position = next((p for p in _positions(self.hass, booked[:7]) if p['position_id']==pid), None)
+            if not position or position['kind'] != ('saving_transfer' if kind=='transfer' else kind):
+                raise HomeAssistantError('Planposition passt nicht zu Monat oder Buchungsart')
+            n = data.get('new_plan_amount_cents')
+            if type(n) is not int or n<=0: raise HomeAssistantError('Ungültiger Zuordnungsbetrag')
+            if db.execute('SELECT 1 FROM ft4_plan_actual_links WHERE month=? AND position_id=? AND transaction_id=?',(booked[:7],pid,ident)).fetchone():
+                raise HomeAssistantError('Planposition bereits zugeordnet')
+            link_id=uuid4().hex
+            db.execute('INSERT INTO ft4_plan_actual_links VALUES(?,?,?,?,?,?)',(link_id,booked[:7],pid,ident,n,now()))
+            self._audit(db,'plan_actual_assign',{'month':booked[:7],'position_id':pid,'transaction_id':ident,'link_id':link_id,'amount_cents':n,'reason':reason,'origin':'booking_edit'})
+        links=db.execute('SELECT month,amount_cents FROM ft4_plan_actual_links WHERE transaction_id=?',(ident,)).fetchall()
+        if any(r['month']!=booked[:7] for r in links) or (kind!=original_kind and links and not pid):
+            raise HomeAssistantError('Bei Monats- oder Artwechsel bisherige Zuordnungen entfernen.')
+        if sum(r['amount_cents'] for r in links)>amount:
+            raise HomeAssistantError('Zuordnungssumme überschreitet den Buchungsbetrag.')
 
     def execute(self, op, data):
         with self._operation(op,data) as db:
@@ -198,8 +244,18 @@ class Ledger:
                 accounts = [dict(r) for r in db.execute('SELECT * FROM ft_accounts ORDER BY name')]
                 for a in accounts:
                     a['balance_cents'] = self._balance(db,a)
-                categories = [dict(r) for r in db.execute('SELECT * FROM ft_categories ORDER BY kind,name')]
+                categories = [dict(r) for r in db.execute('SELECT c.*, EXISTS(SELECT 1 FROM ft_category_archive a WHERE a.id=c.id) AS archived FROM ft_categories c ORDER BY kind,name')]
                 month = validate_month(data.get('month') or date.today().strftime('%Y-%m'))
+                first = date.fromisoformat(month + '-01')
+                from datetime import timedelta
+                previous = (first - timedelta(days=1)).strftime('%Y-%m')
+                today = date.today().isoformat()
+                cutoff = today if month == today[:7] else month + '-31'
+                import calendar
+                cutoff_label = today if month == today[:7] else month + '-' + str(calendar.monthrange(first.year,first.month)[1])
+                for a in accounts:
+                    a['month_start_cents'] = self._balance(db, a, previous + '-31') if a['opening_date'] < month + '-01' else 0
+                    a['month_end_cents'] = self._balance(db, a, cutoff) if a['opening_date'] <= cutoff else 0
                 transactions = [dict(r) for r in db.execute('''SELECT t.*,a.name AS account_name,c.name AS category_name FROM ft_transactions t JOIN ft_accounts a ON a.id=t.account_id LEFT JOIN ft_categories c ON c.id=t.category_id WHERE t.booked LIKE ? AND t.voided=0 ORDER BY t.booked DESC,t.created DESC''',(month+'%',))]
                 creators = {r['transaction_id']: dict(r) for r in db.execute(
                     'SELECT c.* FROM ft_transaction_creators c JOIN ft_transactions t ON t.id=c.transaction_id WHERE t.booked LIKE ?', (month+'%',))}
@@ -209,6 +265,12 @@ class Ledger:
                         tx['creator_name'] = self.actor_label({'id':creator['user_id'],'name':creator['display_name'],'automatic':creator['automatic']}, data.get('_actor_names', {}))
                 # Account view requires both signed legs; category overview retains the
                 # historical single logical transfer representation.
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft4_plan_actual_links'").fetchone():
+                    by_tx = {}
+                    for link in db.execute('SELECT l.* FROM ft4_plan_actual_links l JOIN ft_transactions t ON t.id=l.transaction_id WHERE t.booked LIKE ?', (month+'%',)):
+                        by_tx.setdefault(link['transaction_id'], []).append(dict(link))
+                    for tx in transactions:
+                        tx['allocations'] = by_tx.get(tx['id'], [])
                 account_transactions = [dict(tx) for tx in transactions]
                 transfer_pairs = {}
                 for tx in account_transactions:
@@ -251,7 +313,7 @@ class Ledger:
                 locked_accounts = []
                 recurring = [dict(r) for r in db.execute('SELECT * FROM ft_recurring ORDER BY name')]
                 audit_count = db.execute('SELECT COUNT(*) AS n FROM ft_audit').fetchone()['n']
-                return {'recurring':recurring,'audit_count':audit_count,'accounts':accounts,'categories':categories,'transactions':transactions,'account_transactions':account_transactions,'closings':closings,'month':month,'income_cents':income,'expense_cents':expense,'total_cents':sum(a['balance_cents'] for a in accounts),'transactions_truncated':False,'locked_accounts':locked_accounts}
+                return {'recurring':recurring,'audit_count':audit_count,'accounts':accounts,'categories':categories,'transactions':transactions,'account_transactions':account_transactions,'closings':closings,'month':month,'income_cents':income,'expense_cents':expense,'total_cents':sum(a['balance_cents'] for a in accounts),'balance_cutoff':cutoff,'balance_cutoff_label':cutoff_label,'balance_future':month>today[:7],'transactions_truncated':False,'locked_accounts':locked_accounts}
             if op == 'audit_log':
                 limit = min(max(int(data.get('limit',300)),1),500)
                 month_raw=data.get('month')
@@ -310,7 +372,21 @@ class Ledger:
                             return False
                     events=[]
                     def add_change(row,change_type,label,subject,before_text='',after_text='',reason='',booked=None,amount_cents=None,transaction_id=None,payload=None):
-                        events.append({'id':f"{row['id']}:{change_type}:{len(events)}",'at':row['at'],'action':row['action'],
+                        snapshot = payload or {}
+                        account_ids = set()
+                        for side in ('before', 'after'):
+                            values = snapshot.get(side) or []
+                            for item in values if isinstance(values, list) else [values]:
+                                if isinstance(item, dict):
+                                    account_ids.update(str(item[k]) for k in ('account_id', 'from_id', 'to_id') if item.get(k))
+                        if not account_ids:
+                            tx = tx_row(transaction_id)
+                            if tx:
+                                if tx.get('transfer_id'):
+                                    account_ids.update(str(a['account_id']) for a in db.execute('SELECT account_id FROM ft_transactions WHERE transfer_id=?', (tx['transfer_id'],)))
+                                elif tx.get('account_id'):
+                                    account_ids.add(str(tx['account_id']))
+                        events.append({'account_ids':sorted(account_ids),'id':f"{row['id']}:{change_type}:{len(events)}",'at':row['at'],'action':row['action'],
                                        'actor_name':self.actor_label((payload or {}).get('actor'),data.get('_actor_names',{})),
                                        'change_type':change_type,'change_label':label,'subject':subject or 'Buchung',
                                        'before_text':str(before_text or ''),'after_text':str(after_text or ''),'reason':str(reason or '').strip(),
@@ -503,7 +579,10 @@ class Ledger:
                     payload=json.loads(item['payload'])
                     if payload.get('id')==ident or ident in payload.get('ids',[]):
                         events.append({'at':item['at'],'action':item['action'],'payload':payload})
-                return {'transaction':dict(row),'events':events,'locked':False}
+                transaction=dict(row)
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft4_plan_actual_links'").fetchone():
+                    transaction['allocations']=[dict(r) for r in db.execute('SELECT * FROM ft4_plan_actual_links WHERE transaction_id=?',(ident,))]
+                return {'transaction':transaction,'events':events,'locked':False}
             if op == 'month_summary':
                 month=validate_month(data.get('month') or date.today().strftime('%Y-%m'))
                 totals=db.execute("SELECT kind,COALESCE(SUM(amount_cents),0) AS amount,COUNT(*) AS n FROM ft_transactions WHERE booked LIKE ? AND voided=0 GROUP BY kind",(month+'%',)).fetchall()
@@ -625,16 +704,20 @@ class Ledger:
                 db.execute('UPDATE ft_accounts SET name=?,kind=?,opening_cents=?,opening_date=? WHERE id=?',(name,kind,opening,opened,ident))
                 self._audit(db,op,{'id':ident,'before':before,'after':after})
                 return {'updated':True,'id':ident}
-            if op == 'delete_account':
+            if op in ('delete_account','archive_account','reactivate_account'):
                 ident=str(data.get('id',''))
                 row=db.execute('SELECT * FROM ft_accounts WHERE id=?',(ident,)).fetchone()
                 if not row:
                     raise HomeAssistantError('Konto nicht gefunden')
-                reference_columns={'account_id','to_account_id','from_account_id','source_account_id','target_account_id'}
+                if op == 'reactivate_account':
+                    db.execute('UPDATE ft_accounts SET active=1 WHERE id=?',(ident,))
+                    self._audit(db,op,{'id':ident})
+                    return {'reactivated':True}
+                reference_columns={'account_id','to_account_id','from_account_id','source_account_id','target_account_id','from_id','to_id'}
                 references=[]
                 for table_row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
                     table=table_row['name']
-                    if table in {'ft_accounts','ft_account_meta','ft_account_owners','ft_audit'}:
+                    if table in {'ft_accounts','ft_account_meta','ft_account_owners','ft_audit','ft5_debit_account_settings'}:
                         continue
                     quoted='"'+table.replace('"','""')+'"'
                     columns=[c['name'] for c in db.execute(f'PRAGMA table_info({quoted})')]
@@ -645,11 +728,28 @@ class Ledger:
                         count=db.execute(f'SELECT COUNT(*) FROM {quoted} WHERE {qcol}=?',(ident,)).fetchone()[0]
                         if count:
                             references.append((table,column,count))
+                if op == 'archive_account':
+                    if db.execute('SELECT 1 FROM ft_transactions WHERE account_id=? AND booked>? AND voided=0',(ident,date.today().isoformat())).fetchone():
+                        raise HomeAssistantError('Zukünftige Buchungen zuerst bereinigen')
+                    if self._balance(db,row) != 0:
+                        raise HomeAssistantError('Konto muss vor Archivierung ausgeglichen sein')
+                    blockers=[r for r in references if r[0] not in {'ft_transactions','ft_closings'}]
+                    if blockers:
+                        raise HomeAssistantError('Weitere Kontoreferenzen zuerst bereinigen: '+', '.join(sorted({r[0] for r in blockers})))
+                    db.execute('UPDATE ft_accounts SET active=0 WHERE id=?',(ident,))
+                    if db.execute("SELECT 1 FROM sqlite_master WHERE name='ft5_debit_account_settings'").fetchone():
+                        db.execute('UPDATE ft5_debit_account_settings SET automatic=0 WHERE account_id=?',(ident,))
+                    self._audit(db,op,{'id':ident})
+                    return {'archived':True}
+                if row['opening_cents']:
+                    raise HomeAssistantError('Konto mit Eröffnungsbestand kann nicht gelöscht werden')
                 if references:
                     total=sum(item[2] for item in references)
                     raise HomeAssistantError(f'Konto wird noch in {total} gespeicherten Datensatz/Datensätzen verwendet und kann nicht gelöscht werden')
                 if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft_account_meta'").fetchone():
                     db.execute('DELETE FROM ft_account_meta WHERE account_id=?',(ident,))
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='ft5_debit_account_settings'").fetchone():
+                    db.execute('DELETE FROM ft5_debit_account_settings WHERE account_id=?',(ident,))
                 db.execute('DELETE FROM ft_accounts WHERE id=?',(ident,))
                 self._audit(db,op,{'id':ident,'name':row['name'],'opening_cents':row['opening_cents'],'opening_date':row['opening_date']})
                 return {'deleted':True,'id':ident}
@@ -678,10 +778,7 @@ class Ledger:
                 if booked<account['opening_date']:
                     raise HomeAssistantError('Buchung vor Kontoeröffnung')
                 self._ensure_open(db,booked,[account_id])
-                if category_id:
-                    c=db.execute('SELECT kind FROM ft_categories WHERE id=?',(category_id,)).fetchone()
-                    if not c or c['kind']!=kind:
-                        raise HomeAssistantError('Kategorie passt nicht zur Buchung')
+                self._validate_category(db,category_id,kind)
                 ident=uuid4().hex
                 signed=amount if kind=='income' else -amount
                 db.execute('INSERT INTO ft_transactions VALUES(?,?,?,?,?,?,?,?,?,0)',(ident,booked,account_id,category_id,kind,signed,description,None,now()))
@@ -756,10 +853,11 @@ class Ledger:
                 if booked<max(src['opening_date'],dst['opening_date']):raise HomeAssistantError('Umbuchung vor Kontoeröffnung')
                 self._ensure_open(db,outgoing['booked'],[outgoing['account_id'],incoming['account_id']])
                 self._ensure_open(db,booked,[from_id,to_id])
+                self._edit_plan_allocations(db, outgoing['id'], booked, 'transfer', 'transfer', amount, reason, data)
                 if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft4_plan_actual_links'").fetchone():
                     total=db.execute('SELECT COALESCE(SUM(amount_cents),0) FROM ft4_plan_actual_links WHERE transaction_id IN (?,?)',(outgoing['id'],incoming['id'])).fetchone()[0]
-                    if total and (booked[:7]!=outgoing['booked'][:7] or amount<total):
-                        raise HomeAssistantError('Planbezug zuerst ändern: Monat oder Betrag widerspricht einer bestehenden Zuordnung')
+                    if total>amount or db.execute('SELECT 1 FROM ft4_plan_actual_links WHERE transaction_id=? AND month<>?',(incoming['id'],booked[:7])).fetchone():
+                        raise HomeAssistantError('Planbezug widerspricht der Umbuchung')
                 db.execute('UPDATE ft_transactions SET booked=?,account_id=?,amount_cents=?,description=? WHERE id=?',
                            (booked,from_id,-amount,description,outgoing['id']))
                 db.execute('UPDATE ft_transactions SET booked=?,account_id=?,amount_cents=?,description=? WHERE id=?',
@@ -789,15 +887,8 @@ class Ledger:
                     raise HomeAssistantError('Buchung vor Kontoeröffnung')
                 self._ensure_open(db, original['booked'], [original['account_id']])
                 self._ensure_open(db, booked, [account_id])
-                self._validate_category(db, category_id, kind)
-                # A changed booking must not invalidate existing plan allocations.
-                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ft4_plan_actual_links'").fetchone():
-                    allocations=db.execute('SELECT month,position_id,SUM(amount_cents) AS total FROM ft4_plan_actual_links WHERE transaction_id=? GROUP BY month,position_id',(ident,)).fetchall()
-                    if allocations:
-                        if booked[:7]!=original['booked'][:7] or kind!=original['kind']:
-                            raise HomeAssistantError('Buchung ist mit einer Planposition verknüpft. Planbezug zuerst entfernen, um Monat oder Buchungsart zu ändern.')
-                        if sum(r['total'] for r in allocations)>amount:
-                            raise HomeAssistantError('Der neue Betrag liegt unter den bestehenden Plan-Ist-Zuordnungen. Bitte zuerst Zuordnungen reduzieren oder entfernen.')
+                self._validate_category(db, category_id, kind, original['category_id'])
+                self._edit_plan_allocations(db, ident, booked, kind, original['kind'], amount, reason, data)
                 signed = amount if kind == 'income' else -amount
                 db.execute("UPDATE ft_transactions SET booked=?,account_id=?,category_id=?,kind=?,amount_cents=?,description=? WHERE id=?",
                            (booked, account_id, category_id, kind, signed, description, ident))

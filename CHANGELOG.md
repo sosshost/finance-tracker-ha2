@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.2.0 (2026-11-26)
+
+### Added
+- Reference-aware account and category deletion, archiving and reactivation; monthly closing finding actions.
+
+### Changed
+- Unified transaction editor and plan-to-actual picker; account balance grouping and history layout.
+- Fixed 32 px action buttons and right-aligned category actions.
+
+### Fixed
+- Month-start and cutoff balances; transaction allocation and category action alignment.
+
+### Migration
+- Additive archive schema initialized automatically; backup recommended. No manual migration.
+
+### Compatibility
+- Home Assistant 2026.11; restart and reload frontend. All modules must be updated together.
+
+### Known limitations
+- Full independent end-to-end regression test remains outstanding.
+
 ## 4.1.5 (2026-11-25)
 
 ### Added
