@@ -3,6 +3,47 @@ import sqlite3
 from .closing_balance import differences
 from pathlib import Path
 KINDS=('income','expense','balance','saving_transfer','derived','household_aggregate','clearing','status')
+def category_trends(db, year, periods, historical, timeline):
+ """Read-only category totals using the same plan overlays and closing precedence."""
+ tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+ def exists(name): return name in tables
+ groups={}
+ if exists('ft_categories'):
+  for r in db.execute('SELECT id,name FROM ft_categories'):
+   groups[r[0]]=('name:'+ (r[1].split(' · ')[0] if ' · ' in r[1] else 'Weitere Kategorien'),r[1].split(' · ')[0] if ' · ' in r[1] else 'Weitere Kategorien')
+ if exists('ft3_category_hierarchy') and exists('ft3_category_groups'):
+  for r in db.execute('SELECT h.category_id,g.id,g.name FROM ft3_category_hierarchy h JOIN ft3_category_groups g ON g.id=h.group_id'):
+   groups[r[0]]=(r[1],r[2])
+ mappings={(r[0],r[1]):r[2] for r in db.execute('SELECT source_name,source_kind,category_id FROM ft3_category_mapping')} if exists('ft3_category_mapping') else {}
+ sources={r['period']:r['source'] for r in historical}
+ available={r['period'] for r in timeline}
+ result=[]
+ for item in periods:
+  period=item['period']
+  if not (int(year)-2 <= int(period[:4]) <= int(year)): continue
+  source=sources.get(period,'plan')
+  totals={}
+  def add(kind,cid,amount):
+   if amount is None: return
+   gid,name=groups.get(cid,('uncategorized','Ohne Kategorie'))
+   key=(kind,gid,name)
+   totals[key]=totals.get(key,0)+int(amount)*( -1 if kind=='expense' else 1)
+  if source=='closing':
+   for r in db.execute("SELECT kind,category_id,SUM(amount_cents) FROM ft_transactions WHERE booked LIKE ? AND voided=0 AND kind IN ('income','expense') GROUP BY kind,category_id",(period+'%',)):
+    add(*r)
+  elif period in available:
+   overlay=item['status'] in ('draft','released') and exists('ft3_plan_values')
+   values=dict(db.execute('SELECT position_id,amount_cents FROM ft3_plan_values WHERE month=?',(period,))) if overlay else {}
+   excluded={r[0] for r in db.execute('SELECT position_id FROM ft3_plan_exclusions WHERE month=?',(period,))} if overlay and exists('ft3_plan_exclusions') else set()
+   assigned=dict(db.execute('SELECT position_id,category_id FROM ft3_plan_categories WHERE month=?',(period,))) if exists('ft3_plan_categories') else {}
+   for r in db.execute("SELECT p.id,p.name,p.kind,v.amount_cents FROM ft3_positions p LEFT JOIN ft3_monthly_values v ON v.position_id=p.id AND v.period=? WHERE p.kind IN ('income','expense')",(period,)):
+    if r[0] not in excluded: add(r[2],assigned.get(r[0]) or mappings.get((r[1],r[2])),values.get(r[0],r[3]))
+   if overlay and exists('ft3_template_plan_items') and exists('ft3_templates'):
+    for r in db.execute("SELECT t.kind,i.category_id,i.amount_cents FROM ft3_template_plan_items i JOIN ft3_templates t ON t.id=i.template_id WHERE i.month=? AND t.kind IN ('income','expense')",(period,)): add(*r)
+  else: continue
+  result.append({'period':period,'source':source,'groups':[{'kind':k,'id':g,'name':n,'amount_cents':v} for (k,g,n),v in totals.items()]})
+ return result
+
 def read_planning(db_path,month=None):
  path=Path(db_path)
  if not path.is_file():raise ValueError('Finanzdatenbank nicht vorhanden')
@@ -88,4 +129,4 @@ def read_planning(db_path,month=None):
     required={r[0] for r in db.execute('SELECT id FROM ft_accounts WHERE opening_date<=? AND active=1',(period+'-31',))}
     confirmed={r[0] for r in db.execute('SELECT account_id FROM ft_closings WHERE month=?',(period,))}
     if not required.issubset(confirmed): del closing_differences[period]
-  return {'closing_differences':closing_differences,'month':selected,'periods':periods,'released_plan_months':released_plan_months,'rows':rows,'balances':balances,'timeline':timeline,'historical_months':historical_months,'totals_cents':totals,'source':'Excel-Monatsplanung','note':'Keine Einzelbuchungen. Summen je Typ ohne abgeleitete Kontrollwerte; Kontostände sind Bestandsgrößen und nicht zu addieren.'}
+  return {'category_trends':category_trends(db,selected[:4],periods,historical_months,timeline),'closing_differences':closing_differences,'month':selected,'periods':periods,'released_plan_months':released_plan_months,'rows':rows,'balances':balances,'timeline':timeline,'historical_months':historical_months,'totals_cents':totals,'source':'Excel-Monatsplanung','note':'Keine Einzelbuchungen. Summen je Typ ohne abgeleitete Kontrollwerte; Kontostände sind Bestandsgrößen und nicht zu addieren.'}

@@ -2,9 +2,9 @@
 
 Finance Tracker HA2.0 is a local-first household finance integration for Home Assistant, with a dedicated responsive panel in German.
 
-## Version 4.2.0
+## Version 4.2.2
 
-Reference archive 4.2.0: reference-aware account and category archiving, unified transaction editing, monthly closing actions and harmonized HA2.0 layout. Full independent regression testing remains outstanding.
+Reference archive 4.2.2: category development charts, three-year month selection, redesigned full-screen help and scroll-stable chart filters. Full independent regression testing remains outstanding.
 
 ## Features
 
@@ -18,7 +18,7 @@ Reference archive 4.2.0: reference-aware account and category archiving, unified
 
 ## Installation and upgrade
 
-Add this repository to HACS as a custom integration repository and install Finance Tracker. Restart Home Assistant after upgrading to 4.2.0, then reload the Home Assistant app/browser.
+Add this repository to HACS as a custom integration repository and install Finance Tracker. Restart Home Assistant after upgrading to 4.2.2, then reload the Home Assistant app/browser.
 
 The integration uses domain `finance_tracker` and stores data locally in `config/finance/household_v2.db`. Existing data and IDs are retained. Account-specific automatic-booking permissions must be explicitly enabled; there is no automatic transfer of a previous global permission.
 
