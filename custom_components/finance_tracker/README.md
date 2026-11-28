@@ -8,7 +8,7 @@ Lokale Home-Assistant-Integration zur Haushaltsfinanzplanung, Buchungserfassung,
 
 ## Dashboard (ab 4.3.0)
 
-Optional kann der Finance Tracker als natives HA-Dashboard mit vier Ansichten und persönlicher Startansicht verwendet werden. Siehe [Dashboard-Einrichtung](DASHBOARD_SETUP.md) und [Dashboard-Vorlage](dashboard.yaml). Das bisherige Sidebar-Panel bleibt verfügbar.
+Optional kann der Finance Tracker als natives HA-Dashboard mit vier Ansichten und persönlicher Startansicht verwendet werden. Siehe [Dashboard-Einrichtung](DASHBOARD_SETUP.md) und [Dashboard-Vorlage](dashboard.yaml). Ab 4.3.1 erfolgt die Einrichtung im Storage-Modus beim ersten Öffnen des Sidebar-Panels durch einen Administrator automatisch. Das bisherige Sidebar-Panel bleibt verfügbar.
 
 ## Benachrichtigungen
 

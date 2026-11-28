@@ -1,6 +1,6 @@
 /* Finance Tracker 2.3 - self-contained Home Assistant panel */
 (() => {
-  const tag = 'finance-tracker-panel-v430';
+  const tag = 'finance-tracker-panel-v431';
   if (customElements.get(tag)) return;
   class FinancePanel extends HTMLElement {
     constructor() { super(); this.attachShadow({mode:'open'});this.shadowRoot.addEventListener('click',event=>{

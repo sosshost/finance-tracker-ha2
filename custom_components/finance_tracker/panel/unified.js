@@ -36,7 +36,41 @@
       alert:(title,message,opts={})=>openDialog({title,message,kind:'alert',...opts})
     };
   }
-  const tag = 'finance-tracker-unified-panel-v430';
+  // Use HA's authenticated admin WebSocket commands, never direct storage writes.
+  const dashboardPath='dashboard-finanzen';
+  const resourcePath='/api/finance_tracker/ui/main.js';
+  const buildVersion='4.3.1';
+  const servedVersion='__FT_MANIFEST_VERSION__';
+  const resourceUrl=resourcePath+'?v='+buildVersion.replace(/[.-]/g,'_');
+  const initialDashboard={"title":"Finanzen","views":[{"title":"Monatsübersicht","path":"monatsuebersicht","icon":"mdi:wallet","type":"panel","cards":[{"type":"custom:finance-tracker-card","view":"ledger","dashboard_path":"dashboard-finanzen"}]},{"title":"Finanzplanung","path":"finanzplanung","icon":"mdi:chart-line","type":"panel","cards":[{"type":"custom:finance-tracker-card","view":"planning","dashboard_path":"dashboard-finanzen"}]},{"title":"Stammdaten","path":"stammdaten","icon":"mdi:database","type":"panel","cards":[{"type":"custom:finance-tracker-card","view":"master","dashboard_path":"dashboard-finanzen"}]},{"title":"Abschluss","path":"abschluss","icon":"mdi:clipboard-check-outline","type":"panel","cards":[{"type":"custom:finance-tracker-card","view":"closing","dashboard_path":"dashboard-finanzen"}]}]};
+  const setupKey=Symbol.for('finance-tracker.dashboard-setup.'+buildVersion);
+  const setup=window[setupKey]||(window[setupKey]={pending:null,done:false,attempts:0,retryAt:0});
+  async function provisionDashboard(hass){
+    if(!hass?.user?.is_admin || typeof hass.callWS!=='function')throw Error('Administratorrechte erforderlich.');
+    if(servedVersion!==buildVersion)throw Error('Frontend-Version stimmt nicht mit der installierten Version überein. Bitte App neu laden.');
+    const ws=msg=>hass.callWS(msg);
+    const run=async()=>{
+      const dashboards=await ws({type:'lovelace/dashboards/list'});
+      if(!Array.isArray(dashboards))throw Error('Dashboard-Liste nicht verfügbar');
+      const exists=dashboards.some(d=>d.url_path===dashboardPath)||Object.hasOwn(hass.panels||{},dashboardPath);
+      const resources=await ws({type:'lovelace/resources'});
+      if(!Array.isArray(resources))throw Error('Ressourcen-Liste nicht verfügbar');
+      const matches=resources.filter(r=>typeof r.url==='string'&&r.url.split(/[?#]/)[0]===resourcePath);
+      if(matches.length>1)throw Error('Mehrere Finance-Tracker-Ressourcen vorhanden; bitte manuell bereinigen.');
+      if(matches.length===1){
+        const r=matches[0];
+        if(r.url!==resourceUrl||r.type!=='module')await ws({type:'lovelace/resources/update',resource_id:r.id,url:resourceUrl,res_type:'module'});
+      }else await ws({type:'lovelace/resources/create',url:resourceUrl,res_type:'module'});
+      if(exists)return 'existing';
+      await ws({type:'lovelace/dashboards/create',url_path:dashboardPath,title:'Finanzen',icon:'mdi:cash-multiple',show_in_sidebar:true,require_admin:true});
+      // Do not overwrite any existing dashboard, including an empty user-created one.
+      await ws({type:'lovelace/config/save',url_path:dashboardPath,config:initialDashboard});
+      return 'created';
+    };
+    if(navigator.locks?.request)return navigator.locks.request('finance-tracker-dashboard-setup',run);
+    return run();
+  }
+  const tag = 'finance-tracker-unified-panel-v431';
   if (customElements.get(tag)) return;
   class Unified extends HTMLElement {
     constructor() {
@@ -62,6 +96,7 @@
         if(ledger?.shadowRoot){this._dialogObserver=new MutationObserver(()=>this._syncDialogLayer());this._dialogObserver.observe(ledger.shadowRoot,{subtree:true,childList:true,attributes:true,attributeFilter:['hidden','class']});}
         this.renderSubnav();
       }
+      this._maybeProvisionDashboard();
       if(this._hass && !this.started)this.load();
     }
     disconnectedCallback(){
@@ -125,18 +160,35 @@
     }
     set hass(h) {
       this._hass=h;
+      this._maybeProvisionDashboard();
       if (h && this.isConnected && !this.started) this.load();
       else this.passHass();
+    }
+    _maybeProvisionDashboard(){
+      if(!this.isConnected||!this._hass?.user?.is_admin||typeof this._hass.callWS!=='function'||setup.done||setup.pending||setup.attempts>=3||Date.now()<setup.retryAt)return;
+      setup.attempts++;
+      setup.pending=provisionDashboard(this._hass).then(result=>{
+        setup.done=true;
+        console.info('Finance Tracker: Dashboard-Einrichtung abgeschlossen',result,resourceUrl);
+      }).catch(error=>{
+        setup.retryAt=Date.now()+2000;
+        console.warn('Finance Tracker: Dashboard-Einrichtung fehlgeschlagen (Versuch '+setup.attempts+'/3)',error);
+        if(setup.attempts<3){
+          setTimeout(()=>this._maybeProvisionDashboard(),2100);
+        }else if(this.isConnected){
+          window.FTDialog.alert('Dashboard-Einrichtung','Die automatische Einrichtung konnte nicht abgeschlossen werden. Bitte prüfe DASHBOARD_SETUP.md.\n\n'+(error.message||String(error)));
+        }
+      }).finally(()=>{setup.pending=null;});
     }
     async load() {
       if(this.started) return;
       this.started=true;
       this.error='';
       const modules=[
-        ['finance-tracker-panel-v430','/api/finance_tracker/ui/ledger.js?v=4_3_0'],
-        ['finance-tracker-planning-panel-v430','/api/finance_tracker/ui/planning.js?v=4_3_0'],
-        ['finance-tracker-templates-panel-v430','/api/finance_tracker/ui/templates.js?v=4_3_0'],
-        ['finance-tracker-closing-panel-v430','/api/finance_tracker/ui/closing.js?v=4_3_0']
+        ['finance-tracker-panel-v431','/api/finance_tracker/ui/ledger.js?v=4_3_1'],
+        ['finance-tracker-planning-panel-v431','/api/finance_tracker/ui/planning.js?v=4_3_1'],
+        ['finance-tracker-templates-panel-v431','/api/finance_tracker/ui/templates.js?v=4_3_1'],
+        ['finance-tracker-closing-panel-v431','/api/finance_tracker/ui/closing.js?v=4_3_1']
       ];
       try {
         for(const [name,url] of modules) {
@@ -196,7 +248,7 @@
         .help-overlay{position:fixed;inset:0;z-index:300000;display:flex;align-items:center;justify-content:center;padding:clamp(4px,1vw,12px)}
         .help-backdrop{position:absolute;inset:0;background:#000b}
         .help-dialog{position:relative;width:min(100%,1200px);height:100%;min-height:0;display:flex;flex-direction:column;background:var(--card-background-color,#1b2633);border:1px solid var(--divider-color,#394657);border-radius:14px;overflow:hidden;box-shadow:0 18px 70px #0009}
-        .help-head{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;border-bottom:1px solid var(--divider-color,#394657);flex:none}.help-head strong{font-size:18px}.help-head button{width:40px;padding:0}
+        .help-head{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;border-bottom:1px solid var(--divider-color,#394657);flex:none}.help-head button[hidden]{display:none!important}.help-head strong{font-size:18px}.help-head button{width:40px;padding:0}
         .help-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:8px 12px;border-bottom:1px solid var(--divider-color,#394657);flex:none}.help-nav button{min-width:0;padding:6px;font-size:13px;overflow-wrap:anywhere}.help-nav button:first-child{grid-column:1/-1}
         .help-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:clamp(12px,3vw,28px);line-height:1.55;touch-action:pan-y}.help-page{max-width:920px;margin:auto;outline:none}.help-page h2{font-size:clamp(21px,4vw,30px);line-height:1.2;margin:5px 0 10px}.help-page p{margin:8px 0;color:var(--secondary-text-color,#a8b2c1)}.help-kicker{font-size:11px;letter-spacing:1.2px;font-weight:700;color:var(--primary-color,#4c9aff)}
         .help-section{margin:18px 0;padding:14px;border:1px solid var(--divider-color,#394657);border-radius:12px;min-width:0}.help-section h3{margin:0 0 12px;font-size:17px}.help-flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:8px}.help-flow>div{display:grid;grid-template-columns:30px 1fr;gap:3px 8px;align-items:center;padding:10px;border:1px solid var(--divider-color,#394657);border-radius:10px;background:var(--secondary-background-color,#29364a)}.help-step{grid-row:span 2;color:var(--primary-color,#4c9aff);font-weight:800;font-size:19px}.help-flow small{grid-column:2;color:var(--secondary-text-color,#a8b2c1)}
@@ -220,10 +272,27 @@
       if(typeof ResizeObserver!=='undefined'){this._headerObserver?.disconnect();this._headerObserver=new ResizeObserver(()=>this._syncHeader());this._headerObserver.observe(this.shadowRoot.querySelector('.bar'));}
       this.shadowRoot.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>this.selectTab(b.dataset.tab)));
       const help=this.shadowRoot.getElementById('help-overlay');
+      const setupButton=document.createElement('button');
+      setupButton.type='button';setupButton.textContent='Dashboard einrichten';
+      setupButton.style.cssText='width:auto;min-height:36px;padding:0 10px;white-space:normal';
+      setupButton.hidden=true;
+      help.querySelector('.help-head').insertBefore(setupButton,help.querySelector('.help-head button'));
+      setupButton.addEventListener('click',async()=>{
+        if(!this._hass?.user?.is_admin)return;
+        setupButton.disabled=true;
+        try{
+          if(setup.pending)await setup.pending;
+          setup.pending=provisionDashboard(this._hass);
+          const result=await setup.pending;
+          setup.done=true;setup.attempts=0;
+          await window.FTDialog.alert('Dashboard-Einrichtung',result==='created'?'Dashboard Finanzen wurde angelegt. Bitte App neu laden.':'Dashboard bereits vorhanden. Ressource geprüft; bestehende Ansichten bleiben unverändert.');
+        }catch(error){await window.FTDialog.alert('Dashboard-Einrichtung',error.message||String(error));}
+        finally{setup.pending=null;setupButton.disabled=false;}
+      });
       const helpTabs=[...help.querySelectorAll('[data-help-tab]')];
       const selectHelp=(index,focus=false)=>{helpTabs.forEach((tab,i)=>{tab.setAttribute('aria-selected',String(i===index));tab.tabIndex=i===index?0:-1;help.querySelector('#help-page-'+i).hidden=i!==index;});help.querySelector('.help-body').scrollTop=0;if(focus)helpTabs[index].focus();};
       const closeHelp=()=>{help.hidden=true;this.shadowRoot.getElementById('content').inert=false;this.shadowRoot.querySelector('.bar').inert=false;this.shadowRoot.getElementById('help-open')?.focus();};
-      this.shadowRoot.getElementById('help-open')?.addEventListener('click',()=>{this._headerCollapsed=false;this._syncHeader();help.hidden=false;this.shadowRoot.getElementById('content').inert=true;this.shadowRoot.querySelector('.bar').inert=true;selectHelp(({master:1,planning:2,ledger:3,closing:4})[this.active]??0);requestAnimationFrame(()=>help.querySelector('button[data-help-close]')?.focus());});
+      this.shadowRoot.getElementById('help-open')?.addEventListener('click',()=>{this._headerCollapsed=false;this._syncHeader();help.hidden=false;setupButton.hidden=!this._hass?.user?.is_admin;this.shadowRoot.getElementById('content').inert=true;this.shadowRoot.querySelector('.bar').inert=true;selectHelp(({master:1,planning:2,ledger:3,closing:4})[this.active]??0);requestAnimationFrame(()=>help.querySelector('button[data-help-close]')?.focus());});
       helpTabs.forEach((tab,i)=>tab.addEventListener('click',()=>selectHelp(i,true)));
       help?.querySelectorAll('[data-help-close]').forEach(b=>b.addEventListener('click',closeHelp));
       help?.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();closeHelp();return;}const i=helpTabs.indexOf(e.target);if(i>=0&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)){e.preventDefault();selectHelp(e.key==='Home'?0:e.key==='End'?4:(i+(['ArrowLeft','ArrowUp'].includes(e.key)?4:1))%5,true);}if(e.key==='Tab'){const items=[...help.querySelectorAll('button:not([tabindex="-1"]),[role="tabpanel"]:not([hidden])')];const first=items[0],last=items[items.length-1];if(e.shiftKey&&e.target===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&e.target===last){e.preventDefault();first.focus();}}});
@@ -291,10 +360,10 @@
       const content=this.shadowRoot.getElementById('content');
       if(!content || content.dataset.mounted==='yes') return;
       content.dataset.mounted='yes';
-      const templates=document.createElement('finance-tracker-templates-panel-v430');
-      const planning=document.createElement('finance-tracker-planning-panel-v430');
-      const ledger=document.createElement('finance-tracker-panel-v430');
-      const closing=document.createElement('finance-tracker-closing-panel-v430');
+      const templates=document.createElement('finance-tracker-templates-panel-v431');
+      const planning=document.createElement('finance-tracker-planning-panel-v431');
+      const ledger=document.createElement('finance-tracker-panel-v431');
+      const closing=document.createElement('finance-tracker-closing-panel-v431');
       content.querySelector('#templates').appendChild(templates);
       content.querySelector('#planning').appendChild(planning);
       content.querySelector('#ledger').appendChild(ledger);

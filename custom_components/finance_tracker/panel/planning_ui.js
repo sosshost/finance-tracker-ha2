@@ -45,7 +45,7 @@ button.ft-pencil,button.ft-trash{box-sizing:border-box!important;display:inline-
       alert:(title,message,opts={})=>openDialog({title,message,kind:'alert',...opts})
     };
   }
-const tag='finance-tracker-planning-panel-v430';if(customElements.get(tag))return;
+const tag='finance-tracker-planning-panel-v431';if(customElements.get(tag))return;
 class Planning extends HTMLElement{
  constructor(){super();this.attachShadow({mode:'open'});this.shadowRoot.addEventListener('click',event=>{
   const button=event.composedPath().find(x=>x instanceof HTMLElement&&x.matches?.('button'));

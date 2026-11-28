@@ -1,3 +1,59 @@
+# Finance Tracker v4.3.1
+
+## Added
+- Automatische Dashboard- und Ressourcenanlage beim ersten Administrator-Aufruf im Storage-Modus.
+- Aktion „Dashboard einrichten“ im Hilfe-Dialog.
+
+## Fixed
+- Versionsabgleich der Ressource, Wiederholungslogik und Fehlerdiagnostik.
+
+## Changed
+- Historische separate Entwicklungs-Changelogs entfernt.
+
+## Migration / Compatibility
+- Keine Datenbankmigration; bestehende Dashboards werden nicht überschrieben. HA-Neustart und Frontend-Neuladen erforderlich.
+
+## Known limitations
+- Installation des Entwicklungsstands auf der Haupt-HA bestätigt; automatische Neuanlage auf unabhängiger HA noch nicht live bestätigt.
+- Administrator-Aufruf erforderlich; YAML-Modus und teilweise angelegte Dashboards benötigen ggf. manuellen Fallback.
+
+## 4.3.1-dev.4 (Entwicklungsstand)
+
+- Changed: Installationsarchiv bereinigt; 21 separate historische Entwicklungs-Changelogs entfernt.
+- Compatibility: keine Änderung an Fachlogik, Schnittstellen oder Datenbankschema; zentrale Historie und Dashboard-Fallback erhalten.
+- Known limitations: Live-Validierung der automatischen Dashboard-Neuanlage weiterhin offen.
+
+## 4.3.1-dev.3 (Entwicklungsstand)
+
+- Added: Administrator-Aktion „Dashboard einrichten“ im Hilfe-Dialog.
+- Fixed: gemeinsame Einrichtungssperre pro Frontend-Version und Abgleich mit ausgelieferter Manifest-Version.
+- Compatibility: bestehende Dashboards unverändert; keine Datenmigration.
+- Known limitations: Storage-Modus erforderlich; bei teilweise angelegtem Dashboard manuelle Prüfung; Live-Neuanlage noch offen.
+
+## 4.3.1-dev.2 (Entwicklungsstand)
+
+Ausgangsbasis: 4.3.1-dev.1.
+
+### Fixed
+- Dashboard-Einrichtung auch im nativen Dashboard-Modus; keine Pflicht für hass.panels.
+- Bis zu drei Versuche mit Wartezeit, Freigabe der Ausführungssperre nach Fehlern und Browserdiagnostik.
+- Bestehende Dashboards werden weiterhin nicht überschrieben; keine Datenmigration.
+### Known limitations
+- Admin-Aufruf erforderlich; bei teilweise angelegtem Dashboard manueller Fallback. Live-Test ausstehend.
+
+## 4.3.1-dev.1 (Entwicklungsstand)
+
+### Added
+- Administrative Dashboard-Ersteinrichtung beim Öffnen des bisherigen Finance-Panels über native Lovelace-WebSocket-Befehle.
+- Automatische Ressourcenanlage bzw. Aktualisierung einer vorhandenen Finance-Tracker-Ressource.
+### Compatibility
+- Bestehende Dashboards bleiben unangetastet; neue Dashboards zunächst nur für Administratoren sichtbar.
+- YAML-Ressourcenmodus und Fehler: manueller Fallback; keine direkten Storage-Dateizugriffe.
+- Keine Datenbankmigration. Persönliches Standard-Dashboard bleibt Benutzerentscheidung.
+### Known limitations
+- Erster Aufruf als Administrator erforderlich; keine Anlage allein durch HACS-Download.
+- Gleichzeitige Einrichtung in unterschiedlichen Browsern nicht vollständig atomar; bei Fehler nach Dashboard-Anlage manuelle YAML-Übernahme erforderlich.
+
 # Finance Tracker v4.3.0
 
 Ausgangsbasis: 4.3.0-dev.4 (vom Anwender live freigegeben). Vorheriges offizielles Release: 4.2.2.
