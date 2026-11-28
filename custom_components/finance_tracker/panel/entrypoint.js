@@ -1,6 +1,6 @@
 /* Finance Tracker 2.3 - self-contained Home Assistant panel */
 (() => {
-  const tag = 'finance-tracker-panel-v422';
+  const tag = 'finance-tracker-panel-v430';
   if (customElements.get(tag)) return;
   class FinancePanel extends HTMLElement {
     constructor() { super(); this.attachShadow({mode:'open'});this.shadowRoot.addEventListener('click',event=>{
@@ -78,6 +78,7 @@
     async api(op,data={}) { return this._hass.callWS({type:'finance_tracker/v2',op,data}); }
     async refresh(preserveGroups=false) {
       if(!this._hass)return;
+      if(this.tab==='notifications'){await this.loadNotifications();return;}
       // A view refresh always starts from a compact, closed grouping state.
       if(!preserveGroups){this.expandedBookingGroups=new Set();this.planWorkspaceOpen=new Set();this.proposalStatusOpen=new Set();this.changeGroupsOpen=new Set();this.balanceGroupsOpen={};}
       const seq=this._ledgerRefreshSeq=(this._ledgerRefreshSeq||0)+1,month=this.month;
@@ -127,6 +128,19 @@
       
       if(warnings.length)this.message='Einige Zusatzdaten sind nicht verfügbar: '+warnings.join('; ');
       this.render();
+    }
+    async loadNotifications(){
+      const seq=this._notificationSeq=(this._notificationSeq||0)+1;
+      this.notificationSettings=null;this.notificationError='';this.render();
+      try{const result=await this._hass.callWS({type:'finance_tracker/notifications',op:'info'});if(seq===this._notificationSeq)this.notificationSettings=result;}
+      catch(e){if(seq===this._notificationSeq)this.notificationError=e.message||String(e);}
+      if(seq===this._notificationSeq&&this.tab==='notifications')this.render();
+    }
+    notificationMarkup(){
+      const settings=this.notificationSettings;
+      const admin=this._hass?.user?.is_admin===true;
+      const rows=[['posted','Automatische Verbuchungen','Erfolgreich gespeicherte automatische Lastschriften'],['blocked','Verbuchungsfehler','Neue oder geänderte Fehler bei automatischen Lastschriften']];
+      return `<section class="panel"><div class="eyebrow">Stammdaten</div><h2>Benachrichtigungen</h2><p class="muted">Globale Ereignisfreigabe. Empfänger und Push-Zustellung werden außerhalb des Finance Trackers verwaltet.</p>${this.notificationError?`<p role="alert">${this.esc(this.notificationError)}</p><button id="notification-retry">Erneut laden</button>`:!settings?'Daten werden geladen …':rows.map(([key,title,desc])=>`<label class="check-label" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--divider-color)"><span style="flex:1;min-width:0"><strong>${title}</strong><br><small class="muted">${desc}</small></span><input type="checkbox" data-notification-event="${key}" aria-label="${title}" style="width:16px;height:16px;min-height:16px;flex:0 0 16px" ${settings[key]?'checked':''} ${!admin||this._notificationBusy?'disabled':''}/></label>`).join('')}${!admin?'<p class="muted">Änderungen sind Administratoren vorbehalten.</p>':''}</section><section class="panel"><h2>Weitere Ereignisse</h2><p class="muted">Budget, Kontostände, offene Planbuchungen, Monatsabschluss, Finanzstatus und manuelle Buchungen folgen in späteren Entwicklungsstufen.</p></section>`;
     }
     async loadMonthValidation(){
       if(!this._hass)return;
@@ -843,7 +857,15 @@ button.ft-pencil,button.ft-trash{box-sizing:border-box!important;display:inline-
       const previousTabScroll=this._tabScrollLeft??this.shadowRoot.querySelector('.tabs')?.scrollLeft??0;
       if(this.context!=='master'&&!(this.availablePlanMonths||[]).includes(this.month)){body='<section class="panel" role="status"><strong>Keine freigegebene Monatsplanung</strong><p>Für '+this.esc(this.label(this.month))+' wurde noch kein Plan freigegeben. Buchungsansichten und Planungsvorschläge bleiben für diesen Monat leer.</p></section>'; }
       if(this.context!=='master'&&!(this.availablePlanMonths||[]).includes(this.month))body='<section class="panel" role="status"><h2>Keine freigegebene Monatsplanung</h2><p>Für den ausgewählten Monat liegt keine freigegebene Planung vor. Es werden keine Buchungsinhalte eines anderen Monats angezeigt.</p></section>';
-      this.shadowRoot.innerHTML=style+stage22Style+`<main class="wrap"><div class="sticky-header-group"><header class="top finance-head ft-page-head"><button type="button" class="ha-sidebar-toggle" data-ha-sidebar title="Home-Assistant-Seitenleiste öffnen" aria-label="Home-Assistant-Seitenleiste einblenden">☰</button><div class="ft22-header-identity">${this.context==='master'?`<div class="title">Stammdaten</div><div class="sub">Konten, Kontoinhaber und Kategorien verwalten</div>`:`<div class="title">Monatsübersicht</div><div class="sub">Buchungen, Konten und Planungsvorschläge</div>`}</div>${this.context==='master'?'':`<div class="month-controls"><button type="button" id="prev-month" title="Vorheriger Monat" aria-label="Vorheriger Monat">‹</button>${this.monthPickerMarkup()}<select id="month" aria-label="Monat auswählen">${this.monthChoices().slice().sort((a,b)=>b.localeCompare(a)).map(m=>`<option value="${this.esc(m)}" ${m===this.month?'selected':''}>${this.esc(this.label(m))}</option>`).join('')}</select><button type="button" id="next-month" title="Nächster Monat" aria-label="Nächster Monat">›</button><button type="button" id="refresh-month" title="Ansicht aktualisieren" aria-label="Ansicht aktualisieren">↻</button><button type="button" id="header-booking-search" class="ft-header-search" aria-label="Buchungssuche" title="Buchungssuche"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg></button></div>`}</header></div>${this.message?`<div class="notice">${this.esc(this.message)}</div>`:''}${d?body:'<section class="panel">Daten werden geladen …</section>'}${bookingModal}<div id="account-modal" class="account-modal" hidden></div></main>`;
+      this.shadowRoot.innerHTML=style+stage22Style+`<main class="wrap"><div class="sticky-header-group"><header class="top finance-head ft-page-head"><button type="button" class="ha-sidebar-toggle" data-ha-sidebar title="Home-Assistant-Seitenleiste öffnen" aria-label="Home-Assistant-Seitenleiste einblenden">☰</button><div class="ft22-header-identity">${this.context==='master'?`<div class="title">Stammdaten</div><div class="sub">Konten, Kategorien und Benachrichtigungen verwalten</div>`:`<div class="title">Monatsübersicht</div><div class="sub">Buchungen, Konten und Planungsvorschläge</div>`}</div>${this.context==='master'?'':`<div class="month-controls"><button type="button" id="prev-month" title="Vorheriger Monat" aria-label="Vorheriger Monat">‹</button>${this.monthPickerMarkup()}<select id="month" aria-label="Monat auswählen">${this.monthChoices().slice().sort((a,b)=>b.localeCompare(a)).map(m=>`<option value="${this.esc(m)}" ${m===this.month?'selected':''}>${this.esc(this.label(m))}</option>`).join('')}</select><button type="button" id="next-month" title="Nächster Monat" aria-label="Nächster Monat">›</button><button type="button" id="refresh-month" title="Ansicht aktualisieren" aria-label="Ansicht aktualisieren">↻</button><button type="button" id="header-booking-search" class="ft-header-search" aria-label="Buchungssuche" title="Buchungssuche"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg></button></div>`}</header></div>${this.message?`<div class="notice">${this.esc(this.message)}</div>`:''}${this.tab==='notifications'?this.notificationMarkup():d?body:'<section class="panel">Daten werden geladen …</section>'}${bookingModal}<div id="account-modal" class="account-modal" hidden></div></main>`;
+      this.shadowRoot.getElementById('notification-retry')?.addEventListener('click',()=>this.loadNotifications());
+      this.shadowRoot.querySelectorAll('[data-notification-event]').forEach(input=>input.addEventListener('change',async()=>{
+        if(this._notificationBusy)return;
+        this._notificationBusy=true;const key=input.dataset.notificationEvent,value=input.checked;this.render();
+        try{this.notificationSettings=await this._hass.callWS({type:'finance_tracker/notifications',op:'save',data:{event:key,enabled:value}});this.message='Benachrichtigungseinstellung gespeichert';}
+        catch(e){this.message=e.message||String(e);}
+        finally{this._notificationBusy=false;if(this.tab==='notifications')this.render();}
+      }));
       if(this.shadowRoot.querySelector('.tabs')){const nav=this.shadowRoot.querySelector('.tabs');nav.scrollLeft=previousTabScroll;nav.addEventListener('scroll',()=>{this._tabScrollLeft=nav.scrollLeft;},{passive:true});}
       this.shadowRoot.querySelectorAll('[data-proposal-edit]').forEach(b=>b.addEventListener('click',()=>{this.proposalEdit={name:b.dataset.proposalEdit,kind:b.dataset.proposalKind};this.render();const form=this.shadowRoot.getElementById('proposal-form');if(!form){this.message='Bestätigungsformular konnte nicht geöffnet werden';this.render();return;}form.scrollIntoView({behavior:'smooth',block:'center'});}));
       this.shadowRoot.getElementById('edit-kind')?.addEventListener('change',e=>{const select=this.shadowRoot.getElementById('edit-category');if(!select)return;const eligible=categories.filter(c=>c.kind===e.target.value).sort((a,b)=>a.name.localeCompare(b.name,'de'));select.innerHTML='<option value="">Ohne Kategorie</option>'+this.options(eligible);const title=this.shadowRoot.getElementById('edit-category-title');if(title)title.textContent='Kategorie wählen';});

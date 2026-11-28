@@ -1,136 +1,176 @@
-# Finance Tracker v4.2.2
+# Finance Tracker v4.3.0
+
+Ausgangsbasis: 4.3.0-dev.4 (vom Anwender live freigegeben). Vorheriges offizielles Release: 4.2.2.
 
 ## Added
-- Category development charts for income and expenses, with independent category filters and dynamic axes.
-- Month selection across three calendar years, with horizontal swiping and up to twelve selected months.
-- Redesigned full-screen help with setup and four main-view chapters.
+- Native HA-Dashboard-Integration mit vier Panel-Ansichten: Monatsübersicht, Finanzplanung, Stammdaten und Abschluss. Als persönliches Standard-Dashboard auswählbar.
+- Custom Card `custom:finance-tracker-card`, Dashboard-Vorlage und Installationsanleitung.
+- HA-Ereignis `finance_tracker_direct_debit` (Schema 1) für erfolgreiche und blockierte automatische Lastschriftbuchungen; Versand nach Datenbank-Commit, unveränderte Fehler werden nicht erneut gemeldet.
+- Stammdaten / Benachrichtigungen: globale Freigaben für beide Ereignistypen, standardmäßig aktiv. Änderung nur durch Administratoren; Empfängersteuerung über externe HA-Automationen.
 
 ## Changed
-- Monthly development cards renamed Category Development, Monthly Balance and Monthly Comparison; collapsed by default.
-- Category filter buttons use a three-column grid with centered labels and aligned color dots.
-- Chart axis increments are multiples of EUR 100.
-- Removed redundant year navigation arrows and standalone year label; January retains its year label.
+- Native Navigation ersetzt den eigenen Main-Header im Dashboard-Modus; Hilfe im Inhaltsheader. Gemeinsamer Frontend-Core je Benutzer und Dashboard, interne Absprünge synchronisieren den URL-Pfad.
+- Standardpfad `dashboard-finanzen`; bisheriges Sidebar-Panel bleibt verfügbar.
+- Manifest, Komponentenkennungen und Cache-Referenzen auf 4.3.0 harmonisiert.
 
 ## Fixed
-- Category and month selection update charts without rebuilding the entire view, avoiding scroll jumps.
+- Dashboard-Header: korrekte Grid-Zuordnung für Titel, Hilfe und Monatssteuerung nach Ausblenden des Sidebar-Buttons; verhindert buchstabenweisen Titelumbruch.
 
-## Migration and compatibility
-- No database migration required when upgrading from 4.2.0.
-- Restart Home Assistant and reload the frontend after installation.
+## Migration
+- Keine zusätzliche SQLite-Migration gegenüber 4.2.2. Die Datei `finance/notification_settings.json` wird bei erster Änderung automatisch angelegt. Bestehende Daten bleiben erhalten; Backup vor Update empfohlen.
+
+## Compatibility
+- HA-Neustart und Frontend-Neuladen erforderlich. Dashboard optional; keine automatische Änderung der HA-Konfiguration.
+- Dashboard-Ressource bei bestehenden Entwicklungsinstallationen auf `/api/finance_tracker/ui/main.js?v=4_3_0` ändern. Details in DASHBOARD_SETUP.md.
+- Keine fest hinterlegten Empfänger; externe Automationen sind separat einzurichten.
+
+## Known limitations
+- Native HA-Header und Overlays unterliegen dem HA-Frontend. Ungespeicherte Editoren werden beim Hauptansichtswechsel wie bisher verworfen.
+- Ereignisversand ohne dauerhafte Outbox: Prozessabbruch nach Commit kann ein Ereignis verlieren. Bei unlesbaren Benachrichtigungseinstellungen wird der Versand unterdrückt. Weitere Ereignistypen sind nicht implementiert.
 
 ## Validation
-- Source files matched against the complete v4.2.2 archive. Development version dev.6 was live approved; the final cosmetic change has been installed but not independently live verified. Independent full regression testing remains outstanding.
+- Entwicklungsstand dev.4 durch Anwender live freigegeben. Release-Aufbereitung ausschließlich Versionierung und Dokumentation; finaler Release-Build noch nicht live getestet.
 
 ---
 
-# Changelog
+## 4.3.0-dev.4 – Dashboard-Header Hotfix
 
-## 4.2.0 (2026-11-26)
+- Fixed: explizite Grid-Zuordnung für Titel, Hilfe und Monatssteuerung nach Ausblenden des Sidebar-Buttons; nur Dashboard-Modus.
+- Changed: Standardpfad dashboard-finanzen und Cache-Version.
+- Migration: keine; Backend unverändert. Browser-/Live-Prüfung ausstehend.
 
-### Added
-- Reference-aware account and category deletion, archiving and reactivation; monthly closing finding actions.
+## 4.3.0-dev.3 – Native Dashboard-Ansichten (Entwicklung)
 
-### Changed
-- Unified transaction editor and plan-to-actual picker; account balance grouping and history layout.
-- Fixed 32 px action buttons and right-aligned category actions.
+- Added: `custom:finance-tracker-card` und Dashboard-Vorlage `dashboard.yaml` mit vier nativen Panel-Views.
+- Changed: Dashboard-Modus blendet den eigenen Main-Header und die redundanten Sidebar-Buttons aus; Hilfe im jeweiligen Inhaltsheader. Gemeinsamer Frontend-Core pro Benutzer und Dashboard; interne Absprünge synchronisieren die native URL.
+- Compatibility: bisheriges Sidebar-Panel bleibt erhalten; Backend, WebSocket-Verträge, Push und Datenbank unverändert. Keine Migration.
+- Installation: Integration ersetzen, HA neu starten, Lovelace-Ressource `/api/finance_tracker/ui/main.js?v=4_3_0_dev3` als JavaScript-Modul registrieren. Dashboard mit URL-Pfad `finanzen` erstellen und `dashboard.yaml` im Rohkonfigurationseditor einfügen. Als Standard-Dashboard im Benutzerprofil auswählen. Keine automatische Änderung der HA-Konfiguration.
+- Known limitations: native HA-Header und Overlay-Verhalten, View-Lifecycle, interne Absprünge und mobile Darstellung müssen live getestet werden. Wie im bisherigen Panel werden ungespeicherte Editoren beim Hauptansichtswechsel verworfen. Keine Veröffentlichung vor Live-Freigabe.
 
-### Fixed
-- Month-start and cutoff balances; transaction allocation and category action alignment.
+## 4.3.0-dev.2 – Benachrichtigungseinstellungen
 
-### Migration
-- Additive archive schema initialized automatically; backup recommended. No manual migration.
+- Added: Stammdaten / Benachrichtigungen, zwei persistente globale Ereignisfreigaben, WebSocket `finance_tracker/notifications`.
+- Changed: Lastschrift-Ereignisse werden vor Versand anhand der Freigaben gefiltert; beide standardmäßig aktiv.
+- Compatibility: Nur Administratoren dürfen Einstellungen ändern; Empfängersteuerung bleibt extern. Keine Änderung der Buchungslogik oder SQLite-Struktur.
+- Migration: JSON-Datei `finance/notification_settings.json` wird bei erster Änderung atomar angelegt.
+- Known limitations: Weitere Ereignistypen noch nicht implementiert; bei unlesbaren Einstellungen wird Versand unterdrückt. Live-UI und reale Lastschrift noch zu prüfen.
 
-### Compatibility
-- Home Assistant 2026.11; restart and reload frontend. All modules must be updated together.
+## 4.3.0-dev.1 (development, not released)
 
-### Known limitations
-- Full independent end-to-end regression test remains outstanding.
+- Added: `finance_tracker_direct_debit` HA event, schema_version 1, status posted/blocked, month, position_id, name, kind, amount_cents (absolute), booked; transaction_id for success, reason for blocked.
+- Changed: emit only after SQLite commit; identical persisted failure reasons are not emitted again until resolved or changed. Both scheduled and manual automatic runs use the same path. One event per plan position, including transfers.
+- Compatibility: no schema migration, no changes to websocket response or posting eligibility. No hardcoded recipients. Event data is available on the local HA event bus; configure access and notification recipients appropriately.
+- Known limitations: best-effort event delivery, no durable outbox; process interruption after commit may lose an event. No live validation yet. Notification settings and batch summaries are deferred.
+- Frontend: versioned element names and module cache keys updated; no layout changes.
 
-## 4.1.5 (2026-11-25)
+# Finance Tracker 4.2.2
 
-### Added
-- Daily transaction chronology with collapsed date groups, newest first.
-- Exact-cent amount search with decimal comma or point and optional sign.
-- Server-side authenticated creator and editor attribution in chronology and audit trail.
+Basis: 4.2.1-dev.6 (live bestätigt); vorherige offizielle Version 4.2.0.
 
-### Changed
-- Harmonized HA2.0 pickers and compact group spacing.
-- Transaction editor opens without switching account/category views.
+## Added
+- Kategorieentwicklung: getrennte Einnahmen- und Ausgabendiagramme, 36 Monate in drei Kalenderjahren, maximal 12 ausgewählte Monate, horizontales 6×2-Raster, Jahreszahl im Januar, Kategorienfilter im 3-Spalten-Raster.
+- Visuelles Anwenderhandbuch mit fünf Kapiteln, Workflows, Symbolen und Beispielen; responsive Navigation.
 
-### Fixed
-- Subview synchronization and competing search refreshes.
-- Removed the 500-transaction limit from monthly overview.
+## Changed
+- Drei standardmäßig geschlossene Kacheln: Kategorieentwicklung, Monatsbilanz, Monatsvergleich.
+- Dynamische Achsenteilung in Vielfachen von 100 EUR; linksbündige Farbpunkte und zentrierte Beschriftungen.
+- Redundante Jahresanzeige und Navigationspfeile oberhalb des Monatsrasters entfernt; Wischen und jahresbezogene Sammelauswahl bleiben erhalten.
 
-### Migration
-- Additive ft_transaction_creators table and audit JSON fields. Existing transactions and IDs retained. Backup recommended.
+## Fixed
+- Lokale Diagrammaktualisierung bei Kategorie- und Monatsauswahl statt vollständigem Panel-Neuaufbau.
 
-### Compatibility
-- Restart Home Assistant and reload frontend. Maintainer accepted DEV5 live.
+## Migration / Compatibility
+- Keine zusätzliche Datenbankmigration; additive lesende Zeitreihenabfrage. HA-Neustart und Frontend-Neuladen erforderlich.
 
-### Known limitations
-- Historical unknown authors remain unknown. Cancelled transactions appear in audit rather than chronology. Separate plan-to-actual editing can still switch views. Direct debit runs are attributed to automation.
+## Known limitations
+- Historische Kategorien werden nach aktueller Hierarchie gruppiert. Abgeschlossene Monate zeigen Ist, sonst Plan. Fehlende Monate bleiben Lücken.
+- Letzte Entfernung der redundanten Jahresanzeige noch nicht live bestätigt.
 
+---
 
+# 4.2.1-dev.2
+Basis: bestätigtes Archiv 4.2.1-dev.1.
+Changed: nahezu bildschirmfüllendes Anwenderhandbuch, fünf exklusive Kapitel, Hauptnavigation 2×2, ein scrollbarer Inhaltsbereich, Querformat-Seitennavigation, Tastaturbedienung und Fokusführung.
+Added: visuelle Workflows, Beispielsalden, Plan-Ist-Balken, SVG-Kategorietrend, Monatsraster, Archivierungsentscheidung und Symbolreferenz. Alle Beispiele fiktiv.
+Migration: keine; keine Änderung an Backend-Fachlogik, Daten oder Schnittstellen.
+Compatibility: HA-Neustart und Frontend-Neuladen wegen Komponentenkennung.
+Known limitations: Browser-/Mobil- und Live-Test ausstehend.
 
-## 4.1.4 (2026-11-24)
+---
 
-### Added
-- Expanded direct debit diagnostics and hierarchical account grouping with separate income, expense and transfer totals.
+# 4.2.1-dev.1
+Basis: vollständiges Referenzarchiv 4.2.0.
+Added: Jahresbezogene Oberkategorien-Zeitreihe, getrennte Einnahmen/Ausgaben, 6×2 Monatswahl, Legendenfilter.
+Changed: Beide vorhandenen Entwicklungskacheln klappbar, neue Kachel zuerst und geöffnet. Aktualisierung setzt Kachelzustand zurück. Auswahl bleibt innerhalb des Jahres erhalten.
+Data: Abschlusswerte für vollständig abgeschlossene historische Monate, sonst Plan einschließlich Überlagerungen, Ausschlüssen und Vorlagen. Umbuchungen ausgeschlossen. Fehlende Monate bleiben Lücken. Historische Kategorien werden nicht nach Archivstatus gefiltert; aktuelle Hierarchie maßgeblich.
+Migration: keine, ausschließlich lesender Zugriff; WebSocket-Antwort additiv erweitert.
+Compatibility: HA-Neustart und Frontend-Neuladen erforderlich; Komponenten- und Cache-Kennungen harmonisiert.
+Known limitations: Browser-/Mobil- und Live-Test ausstehend; historische Hierarchieänderungen werden nicht rückwirkend versioniert.
 
-### Changed
-- New monthly plans are created exclusively from current monthly templates.
-- Centralized version display.
+---
 
-### Fixed
-- Account and category persistence, direct debit configuration propagation, both sides of transfers, and unnecessary SQLite schema writes.
+# Finance Tracker 4.2.0
 
-### Migration
-- No manual database migration required; existing data and IDs retained.
+## Added / Changed
+- Kategorien: referenzsicheres Löschen, Archivierung und Reaktivierung.
+- Einheitliche Buchungseditoren und Plan-Ist-Zuordnung; Aktionsbuttons in Prüfbefunden und Historie.
+- Kontostände, Historienfilter und überarbeitete Monatsabschlussansichten.
+- Kategorienlayout: feste rechtsbündige Aktionsspalten, 32 px Symbolbuttons, umbrechende Namen.
 
-### Compatibility
-- Restart Home Assistant and reload the frontend after upgrading. DEV11 functionality was live-accepted by the maintainer.
+## Version harmonization
+- Basis: bereitgestelltes vollständiges Archiv 4.1.5 mit DEV10 und Kategorienlayout-Fix. Manifest, Komponentenkennungen und Cache-Referenzen auf 4.2.0 harmonisiert; keine zusätzliche funktionelle Änderung.
 
-### Known limitations
-- Historical direct debit conflicts are not automatically repaired.
+## Migration
+Die Archivtabelle wird automatisch angelegt. Backup vor Aktualisierung empfohlen.
 
+## Validation
+Statische Python- und JavaScript-Prüfung; kein vollständiger Live-Regressionstest der finalen Version.
 
-## 4.1.3 — Intermediate development snapshot (2026-11-22)
+---
 
-### Added
-- Account-specific approval for automatic bookings, including direct debit scheduling and expected booking days.
-- Improved integrated help organized by main views and subviews.
-- Transaction edit and cancellation actions from plan-to-actual views.
+# Finance Tracker 4.1.4
 
-### Changed
-- Harmonized HA2.0 headers, navigation, dialogs, and monthly selection.
-- Plan-to-actual display, including income overperformance highlighting and zero-plan actuals.
-- Refresh and navigation state management for grouped views.
+## Added
+- Aufklappbare Lastschriftdiagnose unter Buchungen & Konten → Änderungen.
+- Kontogruppierung nach Inhaber, Bank und Konto mit getrennten Summen für Einnahmen, Ausgaben und Umbuchungen.
 
-### Fixed
-- Plan/template propagation of account associations and related attributes.
-- Transaction-to-plan allocation feedback and handling.
-- Frontend route registration for the planning module and navigation initialization guards.
+## Changed
+- Neue Monatsentwürfe ausschließlich aus aktuellen Monatsvorlagen; individuelle Ergänzungen bleiben möglich.
+- Versionsanzeige aus dem Manifest.
 
-### Migration
-- No manual database migration. Account-specific automatic-booking permissions are disabled until explicitly enabled.
+## Fixed
+- Konto- und Kategoriezuordnungen von Vorlagenpositionen beim erneuten Laden.
+- Konsistente Übernahme von Lastschriftmerkmalen in Monatsentwürfe.
+- Anzeige beider Umbuchungsseiten und Bearbeitung nicht zugeordneter Buchungen.
+- Reduzierte Schema-Schreibzugriffe bei Leseoperationen.
 
-### Compatibility
-- Home Assistant 2026.11+, domain `finance_tracker`, existing local database and IDs preserved.
-- Restart Home Assistant after installation to register the frontend routes.
+## Migration
+Keine manuelle Datenbankmigration. Bestehende Pläne und Buchungen bleiben erhalten.
 
-### Known limitations
-- This is an intermediate public snapshot, not a fully live-validated stable release.
-- Complete end-to-end regression testing on an independent Home Assistant installation remains outstanding.
+## Compatibility
+Home Assistant 2026.11; Neustart und Frontend-Neuladen erforderlich. Alle Module gemeinsam aktualisieren.
 
-## 4.1.1 — Master data, onboarding and anonymization
+## Known limitations
+Historische Lastschriftkonflikte werden nicht automatisch bereinigt. Bestehende Monatspläne werden nicht rückwirkend aus Vorlagen aktualisiert.
 
-- Persistent account-owner administration and account master-data management.
-- Integrated help and first-time setup guidance.
-- Removed household-specific defaults and mappings.
-- Existing data retained without manual migration.
+# 4.2.1-dev.3
+Basis: 4.2.1-dev.2 (bestätigt).
+- Kategorieentwicklung: drei Kalenderjahre, maximal zwölf ausgewählte Monate, horizontales 6×2-Raster mit Jahresmarkierung und Pfeilen. Jahresbezogene Sammelauswahl respektiert das globale Limit.
+- Kategorienfilter: drei Spalten, 42 px bisherige Mindesthöhe, zweizeilige Beschriftung.
+- Kategorieentwicklung, Monatsbilanz, Monatsvergleich: standardmäßig geschlossen; Hilfe aktualisiert.
+- Backend: ausschließlich lesende Erweiterung des Zeitfensters; keine Migration. Bestehende Plan-/Abschlusslogik unverändert.
+- Versionierung: Manifest, const und fünf Panelmodule harmonisiert.
 
-## 4.1.0 — Independent publication baseline
+## 4.2.1-dev.4
 
-- Independent Home Assistant setup and frontend asset-serving structure.
-- Original brand assets and Marketplace/HACS metadata.
-- Local database and active finance functionality retained.
+Fixed: Category filters update only the affected chart, retaining button focus, card state and month selector position. Empty charts retain the same SVG dimensions. No backend or database changes. Live validation pending.
+
+## 4.2.1-dev.5
+
+Basis: 4.2.1-dev.4. Kategorieentwicklung: dynamische Y-Achse mit Teilungen in Vielfachen von 100 EUR, mindestens 100 EUR Obergrenze; negative Werte bleiben sichtbar. Kategoriebuttons: feste linke Farbpunktspalte, zentrierter Text, unveränderte 42 px Höhe. Scrollstabilisierung unverändert. Manifest und Panelkennungen harmonisiert. Keine Backend-Fachlogik oder Migration. Live-Test ausstehend.
+
+## 4.2.1-dev.6
+
+- Fixed: month selection and bulk actions update only plots, checkbox states and selection labels; no full panel render.
+- Changed: removed redundant year navigation arrows; horizontal scrolling and year label remain.
+- Migration: none. Backend unchanged. Live scroll verification pending.

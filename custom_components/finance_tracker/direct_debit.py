@@ -3,16 +3,37 @@
 All SQLite work runs in HA's executor; no posting without two explicit opt-ins.
 """
 import calendar
+import logging
 import sqlite3
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
 from homeassistant.exceptions import HomeAssistantError
+from .notification_settings import enabled as notification_enabled
 from .ledger import Ledger, now, validate_month
 from homeassistant.util import dt as dt_util
 from .finance_planning import read_planning
 from .plan_actual import SCHEMA as LINKS_SCHEMA
 from .booking_proposals import SCHEMA as PROPOSALS_SCHEMA
+
+_LOGGER = logging.getLogger(__name__)
+EVENT_TYPE = "finance_tracker_direct_debit"
+
+
+def _emit(hass, payload):
+    """Schedule an event after commit; notification failure cannot affect the ledger."""
+    if not notification_enabled(hass, payload["status"]):
+        return
+    def fire():
+        try:
+            hass.bus.async_fire(EVENT_TYPE, payload)
+        except Exception:
+            _LOGGER.exception("Finance Tracker event dispatch failed")
+    try:
+        hass.loop.call_soon_threadsafe(fire)
+    except Exception:
+        _LOGGER.exception("Finance Tracker event scheduling failed")
+
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS ft5_debit_positions(
@@ -195,10 +216,21 @@ def run(hass,today=None):
                 db.execute('INSERT INTO ft5_debit_runs VALUES(?,?,?,?,?,?)',(month,pid,booked.isoformat(),tx,second,now()))
                 db.execute('DELETE FROM ft5_debit_failures WHERE month=? AND position_id=?',(month,pid))
                 ledger._audit(db,'automatic_debit',{'month':month,'position_id':pid,'transaction_id':tx,'second_transaction_id':second})
+                db.commit()
                 posted+=1
+                _emit(hass, {'schema_version':1,'status':'posted','month':month,
+                    'position_id':pid,'name':desc,'kind':kind,'amount_cents':amount,
+                    'booked':booked.isoformat(),'transaction_id':tx})
             except (HomeAssistantError,sqlite3.Error,ValueError) as exc:
                 db.rollback()  # Atomicity: never commit a partial transfer or failed posting.
                 blocked.append({'position_id':pid,'reason':str(exc)})
+                previous=db.execute('SELECT reason FROM ft5_debit_failures WHERE month=? AND position_id=?',(month,pid)).fetchone()
                 db.execute('INSERT INTO ft5_debit_failures VALUES(?,?,?,?) ON CONFLICT(month,position_id) DO UPDATE SET reason=excluded.reason,at=excluded.at',(month,pid,str(exc)[:500],now()))
+                db.commit()
+                if not previous or previous['reason'] != str(exc)[:500]:
+                    _emit(hass, {'schema_version':1,'status':'blocked','month':month,
+                        'position_id':pid,'name':str(row.get('name') or '')[:240],
+                        'kind':kind,'amount_cents':amount,'booked':booked.isoformat(),
+                        'reason':str(exc)[:500]})
                 # Keep failed positions eligible for retry after correction.
     return {'enabled':True,'posted':posted,'blocked':blocked}

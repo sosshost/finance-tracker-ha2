@@ -36,7 +36,7 @@
       alert:(title,message,opts={})=>openDialog({title,message,kind:'alert',...opts})
     };
   }
-  const tag = 'finance-tracker-unified-panel-v422';
+  const tag = 'finance-tracker-unified-panel-v430';
   if (customElements.get(tag)) return;
   class Unified extends HTMLElement {
     constructor() {
@@ -56,13 +56,21 @@
       // One capture listener; window + document listeners caused duplicate/conflicting samples.
       document.addEventListener('scroll',this._scrollListener,{capture:true,passive:true});
       this._syncHeader();
+      if(this.ready){
+        this._installSubnavObservers();
+        const ledger=this.shadowRoot.querySelector('#ledger > *');
+        if(ledger?.shadowRoot){this._dialogObserver=new MutationObserver(()=>this._syncDialogLayer());this._dialogObserver.observe(ledger.shadowRoot,{subtree:true,childList:true,attributes:true,attributeFilter:['hidden','class']});}
+        this.renderSubnav();
+      }
       if(this._hass && !this.started)this.load();
     }
     disconnectedCallback(){
       document.removeEventListener('scroll',this._scrollListener,true);
       this._dialogObserver?.disconnect();
       this._headerObserver?.disconnect();
+      this._closeSearch?.();
       for(const observer of this._subnavObservers?.values()||[])observer.disconnect();
+      this._subnavObservers?.clear();
     }
     _syncDialogLayer(){
       const ledger=this.shadowRoot.querySelector('#ledger > *');
@@ -80,6 +88,7 @@
     }
     _syncHeader(){
       const bar=this.shadowRoot.querySelector('.bar');if(!bar)return;
+      if(this.dashboardMode){this.style.setProperty('--ft-sticky-top','0px');return;}
       // Transform only: NEVER change margin, height or layout flow during scrolling.
       const height=bar.offsetHeight||0;
       bar.style.transform=this._headerCollapsed?`translate3d(0,-${height}px,0)`:'translate3d(0,0,0)';
@@ -88,7 +97,7 @@
       if(this._lastStickyTop!==top){this.style.setProperty('--ft-sticky-top',top);this._lastStickyTop=top;}
     }
     _handleHeaderScroll(e){
-      if(this._dialogLayerActive)return;
+      if(this.dashboardMode||this._dialogLayerActive)return;
       const target=e.target;
       if(target!==document&&target!==document.scrollingElement&&target!==document.documentElement&&target!==document.body){
         // Only scroll events originating from the primary page scroll container.
@@ -124,10 +133,10 @@
       this.started=true;
       this.error='';
       const modules=[
-        ['finance-tracker-panel-v422','/api/finance_tracker/ui/ledger.js?v=4_2_2'],
-        ['finance-tracker-planning-panel-v422','/api/finance_tracker/ui/planning.js?v=4_2_2'],
-        ['finance-tracker-templates-panel-v422','/api/finance_tracker/ui/templates.js?v=4_2_2'],
-        ['finance-tracker-closing-panel-v422','/api/finance_tracker/ui/closing.js?v=4_2_2']
+        ['finance-tracker-panel-v430','/api/finance_tracker/ui/ledger.js?v=4_3_0'],
+        ['finance-tracker-planning-panel-v430','/api/finance_tracker/ui/planning.js?v=4_3_0'],
+        ['finance-tracker-templates-panel-v430','/api/finance_tracker/ui/templates.js?v=4_3_0'],
+        ['finance-tracker-closing-panel-v430','/api/finance_tracker/ui/closing.js?v=4_3_0']
       ];
       try {
         for(const [name,url] of modules) {
@@ -170,6 +179,8 @@
       if(this.shadowRoot.getElementById('content')) return;
       this.shadowRoot.innerHTML=`<style>
         :host{display:block;min-height:100vh;background:var(--primary-background-color,#111827);color:var(--primary-text-color,#e8edf3);font:inherit}
+        :host([dashboard-mode]){min-height:0}
+        :host([dashboard-mode]) .bar{display:none!important}
         *{box-sizing:border-box}
         .bar{position:sticky;top:0;z-index:200000;transition:transform .42s cubic-bezier(.4,0,.2,1)!important;will-change:transform;backface-visibility:hidden;background:var(--card-background-color,#1e293b);border-bottom:1px solid var(--divider-color,#394657);padding:12px clamp(12px,3vw,26px)}
         @media (prefers-reduced-motion:reduce){.bar{transition:none!important}}
@@ -280,10 +291,10 @@
       const content=this.shadowRoot.getElementById('content');
       if(!content || content.dataset.mounted==='yes') return;
       content.dataset.mounted='yes';
-      const templates=document.createElement('finance-tracker-templates-panel-v422');
-      const planning=document.createElement('finance-tracker-planning-panel-v422');
-      const ledger=document.createElement('finance-tracker-panel-v422');
-      const closing=document.createElement('finance-tracker-closing-panel-v422');
+      const templates=document.createElement('finance-tracker-templates-panel-v430');
+      const planning=document.createElement('finance-tracker-planning-panel-v430');
+      const ledger=document.createElement('finance-tracker-panel-v430');
+      const closing=document.createElement('finance-tracker-closing-panel-v430');
       content.querySelector('#templates').appendChild(templates);
       content.querySelector('#planning').appendChild(planning);
       content.querySelector('#ledger').appendChild(ledger);
@@ -297,10 +308,10 @@
       this._dialogObserver.observe(ledger.shadowRoot,{subtree:true,childList:true,attributes:true,attributeFilter:['hidden','class']});
       this._syncDialogLayer();
       this._installSubnavObservers();
-      this.selectTab(this.active);
+      this.selectTab(this.active,{native:true});
       this.passHass();
     }
-    selectTab(tab,{deferRefresh=false}={}) {
+    selectTab(tab,{deferRefresh=false,native=false}={}) {
       if(!['templates','planning','ledger','master','closing'].includes(tab)) return;
       const targetTab=tab==='master'?'ledger':tab;
       const old=this.active;
@@ -316,6 +327,7 @@
         }
       }
       this.active=tab;
+      if(this.dashboardMode&&!native&&old!==tab)this.dashboardNavigate?.(tab);
       this._syncDialogLayer();
       const switchToken=this._switchToken=(this._switchToken||0)+1;
       this._reconcileMonth(tab,targetPanel,switchToken,deferRefresh);
@@ -366,7 +378,7 @@
     _choices(){
       return this.active==='planning'?[['planning','Monatsplanung'],['templates','Monatsvorlage'],['development','Monatsentwicklung'],['actual','Plan-Ist-Vergleich']]:
         this.active==='ledger'?[['overview','Buchungen nach Kategorie'],['proposals','Vorschläge aus Planung'],['changes','Buchungshistorie'],['balances','Kontostände']]:
-        this.active==='master'?[['accounts','Kontenverwaltung'],['owners','Kontoinhaber'],['categories','Kategorien']]:[];
+        this.active==='master'?[['accounts','Kontenverwaltung'],['owners','Kontoinhaber'],['categories','Kategorien'],['notifications','Benachrichtigungen']]:[];
     }
     _installSubnavObservers(){
       this._subnavObservers??=new Map();
@@ -384,6 +396,28 @@
       const root=child?.shadowRoot;
       const main=root?.querySelector('main.wrap');
       if(!main)return;
+      if(this.dashboardMode){
+        const sidebar=main.querySelector('[data-ha-sidebar],[data-sidebar]');
+        if(sidebar&&!sidebar.hidden){sidebar.hidden=true;sidebar.style.display='none';}
+        const header=main.querySelector('.ft-page-head,.header,.head');
+        if(header){
+          header.setAttribute('data-ft-dashboard-header','');
+          if(!root.getElementById('ft-dashboard-header-layout')){
+            const style=document.createElement('style');style.id='ft-dashboard-header-layout';
+            style.textContent=`[data-ft-dashboard-header]{grid-template-columns:minmax(0,1fr) auto!important;min-height:0!important}
+              [data-ft-dashboard-header]>:nth-child(2){grid-column:1;grid-row:1;min-width:0;padding-right:0}
+              [data-ft-dashboard-header]>[data-ft-dashboard-help]{grid-column:2;grid-row:1;justify-self:end;align-self:center}
+              [data-ft-dashboard-header]>.controls,[data-ft-dashboard-header]>.month-controls,[data-ft-dashboard-header]>.closing-controls{grid-column:1/-1!important;grid-row:2;min-width:0}
+              [data-ft-dashboard-header]>[data-ha-sidebar],[data-ft-dashboard-header]>[data-sidebar]{display:none!important}`;
+            root.append(style);
+          }
+        }
+        if(header&&!header.querySelector('[data-ft-dashboard-help]')){
+          const help=document.createElement('button');help.type='button';help.dataset.ftDashboardHelp='';help.textContent='?';help.title='Finance Tracker – Hilfe';help.setAttribute('aria-label','Hilfe öffnen');
+          help.style.cssText='flex:0 0 28px;width:28px;min-width:28px;height:28px;min-height:28px;padding:0;border-radius:50%;font-weight:800';
+          help.onclick=()=>this.shadowRoot.getElementById('help-open').click();header.append(help);
+        }
+      }
       if(key==='closing'){if(!root.getElementById('ft-closing-sticky')){const style=document.createElement('style');style.id='ft-closing-sticky';style.textContent='.header{position:sticky!important;top:var(--ft-sticky-top,0px)!important;transition:top .42s cubic-bezier(.4,0,.2,1)!important;z-index:1000!important;background:var(--primary-background-color,#111827)}';root.append(style);}return;}
       // The child's render() replaces its shadow DOM. Restore the navigation
       // immediately after the month/header row without modifying child logic.
@@ -487,7 +521,7 @@
       this.shadowRoot.append(overlay);
       const input=overlay.querySelector('input'),results=overlay.querySelector('.ft-search-results');
       const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-      const close=()=>{overlay.remove();document.removeEventListener('keydown',onKey,true);};
+      const close=()=>{overlay.remove();document.removeEventListener('keydown',onKey,true);this._closeSearch=null;};this._closeSearch=close;
       const onKey=e=>{if(e.key==='Escape'){e.preventDefault();close();}};
       document.addEventListener('keydown',onKey,true);
       overlay.addEventListener('click',e=>{if(e.target===overlay||e.target.closest('[data-search-close]'))close();});
@@ -533,4 +567,46 @@
     }
   }
   customElements.define(tag,Unified);
+  const cardTag='finance-tracker-card';
+  const views={ledger:'monatsuebersicht',planning:'finanzplanung',master:'stammdaten',closing:'abschluss'};
+  let session=null;
+  class FinanceTrackerCard extends HTMLElement {
+    setConfig(config){
+      if(!Object.hasOwn(views,config.view))throw Error('Finance Tracker: view muss ledger, planning, master oder closing sein.');
+      const base=config.dashboard_path||'dashboard-finanzen';
+      if(!/^[a-z0-9][a-z0-9_-]*$/.test(base))throw Error('Finance Tracker: ungültiger Dashboard-Pfad.');
+      this.config={view:config.view,base};this._attach();
+    }
+    set hass(h){this._hass=h;this._attach();}
+    connectedCallback(){this.style.display='block';this._attach();}
+    getCardSize(){return 10;}
+    _attach(){
+      if(!this.isConnected||!this.config||!this._hass?.user?.id)return;
+      const {view,base}=this.config;
+      const key=this._hass.user.id+':'+base;
+      if(!session||session.key!==key){
+        session?.core.remove();
+        const core=document.createElement(tag);core.dashboardMode=true;core.setAttribute('dashboard-mode','');session={key,core};
+      }
+      const core=session.core;
+      // Ignore late hass updates from a card being removed during a native route change.
+      const path=location.pathname.replace(/\/$/,'');
+      const root='/'+base;
+      if(path!==root+'/'+views[view]&&!(view==='ledger'&&path===root))return;
+      core.dashboardNavigate=tab=>{
+        const target=root+'/'+views[tab];
+        if(location.pathname!==target){history.pushState(null,'',target);window.dispatchEvent(new CustomEvent('location-changed',{detail:{replace:false}}));}
+      };
+      if(core.parentNode!==this){
+        if(core.ready&&core.active!==view)core.selectTab(view,{native:true});
+        else if(!core.ready)core.active=view;
+        this.append(core);
+      }else if(core.active!==view){
+        // Internal jumps update the route before HA replaces the old card.
+        if(core.ready)core.selectTab(view,{native:true});else core.active=view;
+      }
+      core.hass=this._hass;
+    }
+  }
+  if(!customElements.get(cardTag))customElements.define(cardTag,FinanceTrackerCard);
 })();

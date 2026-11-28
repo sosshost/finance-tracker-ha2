@@ -22,6 +22,7 @@ from .category_catalog import initialize as initialize_categories
 from .category_catalog import summary as category_summary
 from .const import DOMAIN, LEDGER_KEY, RUNTIME_READY_KEY
 from .frontend import async_register_frontend, async_unregister_frontend
+from .notification_settings import action as notification_action
 from .direct_debit import action as debit_action, run as run_debits
 from homeassistant.helpers.event import async_track_time_change
 from .ledger import Ledger
@@ -86,6 +87,22 @@ def _register_direct_debit(hass: HomeAssistant) -> None:
             return
         await _run_worker(hass, connection, msg, "direct_debit", "Lastschriftaktion fehlgeschlagen",
                           debit_action, hass, msg["op"], msg["data"])
+    websocket_api.async_register_command(hass, command)
+
+
+def _register_notifications(hass: HomeAssistant) -> None:
+    @websocket_api.websocket_command({
+        vol.Required("type"): "finance_tracker/notifications",
+        vol.Required("op"): vol.In(["info", "save"]),
+        vol.Optional("data", default={}): dict,
+    })
+    @websocket_api.async_response
+    async def command(hass, connection, msg):
+        if msg["op"] == "save" and not connection.user.is_admin:
+            connection.send_error(msg["id"], "unauthorized", "Nur Administratoren dürfen Benachrichtigungen konfigurieren")
+            return
+        await _run_worker(hass, connection, msg, "notifications", "Benachrichtigungseinstellungen nicht verfügbar",
+                          notification_action, hass, msg["op"], msg["data"])
     websocket_api.async_register_command(hass, command)
 
 
@@ -380,6 +397,7 @@ def _register_runtime_interfaces(hass: HomeAssistant) -> None:
     """Install every websocket endpoint exactly once for this HA process."""
     _register_category_summary(hass)
     _register_direct_debit(hass)
+    _register_notifications(hass)
     _register_category_admin(hass)
     _register_account_meta(hass)
     _register_proposals(hass)

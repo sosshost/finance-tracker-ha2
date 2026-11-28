@@ -1,33 +1,19 @@
 # Finance Tracker HA2.0
 
-Finance Tracker HA2.0 is a local-first household finance integration for Home Assistant, with a dedicated responsive panel in German.
+Lokale Home-Assistant-Integration zur Haushaltsfinanzplanung, Buchungserfassung, Kontenverwaltung und zum Monatsabschluss.
 
-## Version 4.2.2
+## Installation
 
-Reference archive 4.2.2: category development charts, three-year month selection, redesigned full-screen help and scroll-stable chart filters. Full independent regression testing remains outstanding.
+Über HACS als benutzerdefiniertes Integrationsrepository `https://github.com/sosshost/finance-tracker-ha2` hinzufügen oder den vollständigen Ordner `finance_tracker` nach `custom_components/` kopieren. Home Assistant neu starten und die Integration unter Einstellungen / Geräte & Dienste hinzufügen. Bei Updates bestehende Finanzdaten sichern und die Integration nicht entfernen.
 
-## Features
+## Dashboard (ab 4.3.0)
 
-- Account owners, account management, categories and account-specific authorization for automatic booking
-- Financial planning, monthly templates and recurring planning positions
-- Direct debit scheduling, expected booking day and optional automatic booking
-- Monthly transaction overview by category and by account
-- Plan-to-actual allocation, editing, cancellation and audit trail
-- Booking proposals and guided month-end closing
-- Responsive HA2.0 interface, integrated help and accessible navigation
+Optional kann der Finance Tracker als natives HA-Dashboard mit vier Ansichten und persönlicher Startansicht verwendet werden. Siehe [Dashboard-Einrichtung](DASHBOARD_SETUP.md) und [Dashboard-Vorlage](dashboard.yaml). Das bisherige Sidebar-Panel bleibt verfügbar.
 
-## Installation and upgrade
+## Benachrichtigungen
 
-Add this repository to HACS as a custom integration repository and install Finance Tracker. Restart Home Assistant after upgrading to 4.2.2, then reload the Home Assistant app/browser.
+Das lokale HA-Ereignis `finance_tracker_direct_debit` meldet erfolgreiche (`posted`) und blockierte (`blocked`) automatische Lastschriften. Die globalen Ereignisfreigaben befinden sich unter Stammdaten / Benachrichtigungen. Empfänger und Push-Aktionen werden separat in HA-Automationen definiert. Ereignisse können Finanzinformationen enthalten; Zugriff und Empfänger entsprechend beschränken.
 
-The integration uses domain `finance_tracker` and stores data locally in `config/finance/household_v2.db`. Existing data and IDs are retained. Account-specific automatic-booking permissions must be explicitly enabled; there is no automatic transfer of a previous global permission.
+## Änderungen
 
-The upgrade automatically initializes additive creator-attribution and category-archive tables. Back up the database before upgrading. Historical authors are not inferred.
-
-## Privacy
-
-Published source code contains no personal account data or household-specific account-owner mappings. All personal data remains on the Home Assistant instance.
-
-## Notes
-
-See [CHANGELOG.md](CHANGELOG.md) for the detailed release history and [PROVENANCE.md](PROVENANCE.md) for source provenance and publication limitations.
+Siehe [Changelog](CHANGELOG.md) und [Release Notes](RELEASE_NOTES.md).

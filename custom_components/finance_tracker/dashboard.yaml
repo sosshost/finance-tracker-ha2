@@ -1,0 +1,34 @@
+title: Finanzen
+views:
+  - title: Monatsübersicht
+    path: monatsuebersicht
+    icon: mdi:wallet
+    type: panel
+    cards:
+      - type: custom:finance-tracker-card
+        view: ledger
+        dashboard_path: dashboard-finanzen
+  - title: Finanzplanung
+    path: finanzplanung
+    icon: mdi:chart-line
+    type: panel
+    cards:
+      - type: custom:finance-tracker-card
+        view: planning
+        dashboard_path: dashboard-finanzen
+  - title: Stammdaten
+    path: stammdaten
+    icon: mdi:database
+    type: panel
+    cards:
+      - type: custom:finance-tracker-card
+        view: master
+        dashboard_path: dashboard-finanzen
+  - title: Abschluss
+    path: abschluss
+    icon: mdi:clipboard-check-outline
+    type: panel
+    cards:
+      - type: custom:finance-tracker-card
+        view: closing
+        dashboard_path: dashboard-finanzen
